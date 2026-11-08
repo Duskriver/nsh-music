@@ -13,6 +13,7 @@ import {
   type Health,
   type Home,
   type Library,
+  type Lyrics,
   type Me,
   type PlayerState,
   type RepeatMode,
@@ -116,6 +117,10 @@ export class DemoBackend implements Backend {
   /** Fixtures have no images; the backdrops fall back to the theme. */
   async coverColors(_imageUrl: string): Promise<string[]> {
     return [];
+  }
+
+  lyrics(trackUri: string): Promise<Lyrics> {
+    return this.#data(() => fixtures.lyrics(trackUri), false);
   }
 
   me(): Promise<Me> {

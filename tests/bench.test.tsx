@@ -4,7 +4,9 @@
 //
 //   SPOTISH_BENCH=1 nsh test --target macos --fps -v tests/bench.test.tsx
 //
+// (or `--target linux`: the platform follows the machine's.)
 // Each scenario logs a `bench:` mark before its per-second perf lines.
+import os from "os";
 import process from "process";
 import { open, test as plainTest } from "nsh/test";
 
@@ -12,7 +14,7 @@ const test = process.env.SPOTISH_BENCH === "1" ? plainTest : plainTest.skip;
 
 async function start() {
   const app = await open("../App.tsx", {
-    platform: "macos", width: 1280, height: 800,
+    platform: os.platform() === "linux" ? "linux" : "macos", width: 1280, height: 800,
     storage: { "firstRun:done": "1" },
     host: { params: { backend: "demo", demo: "rich" } },
   });
@@ -78,3 +80,18 @@ test("bench 5: open and close Now Playing", async () => {
     await app.wait(900);
   }
 });
+
+test("bench 6: visit many pages from the sidebar, then rest", async () => {
+  const app = await start();
+  await app.wait(1500);
+  mark("visit-many");
+  const pages = ["Late Trains", "Harbor Walk", "Liked Songs", "Quiet Machines", "Little Streets", "Distant Echoes", "Amber Gardens", "Copper Rooms", "Golden Windows", "Northern Islands"];
+  for (let i = 0; i < 2; i++) {
+    for (const page of pages) {
+      await app.press(`role:button[${page}] >> nth=0`);
+      await app.wait(700);
+    }
+  }
+  mark("rest");
+  await app.wait(5000);
+}, 120000);

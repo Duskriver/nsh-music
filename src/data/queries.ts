@@ -1,9 +1,9 @@
 // The app's queries: each a cache-first load keyed by the account, loading
 // again with each new epoch (ready, signed in or out, a new token).
 
-import { type Accessor, resource } from "nsh";
+import { type Accessor, resource, type Resource } from "nsh";
 import { type CachedQuery, cachedQuery } from "./cache";
-import { type Collection, type Home, kindOf, type Library, type Me } from "../backend/types";
+import { type Collection, type Home, kindOf, type Library, type Lyrics, type Me } from "../backend/types";
 import { backend } from "../state/engine";
 import { cacheAccount, dataEpoch } from "../state/session";
 
@@ -68,4 +68,37 @@ export function coverColorsQuery(image: () => string): Accessor<string[]> {
 export function coverColorQuery(image: () => string): Accessor<string> {
   const colors = coverColorsQuery(image);
   return () => colors()[0] ?? "";
+}
+
+/** Lyrics kept in memory, by track URI, most recent last: going back to a
+ * song shows its lyrics at once. Not in the stored cache (its room is the
+ * pages'), and not per account (lyrics are the same for everyone). */
+const lyricsMemo = new Map<string, Lyrics>();
+const LYRICS_KEPT = 30;
+
+async function loadLyrics(uri: string): Promise<Lyrics> {
+  const known = lyricsMemo.get(uri);
+  if (known) {
+    lyricsMemo.delete(uri);
+    lyricsMemo.set(uri, known);
+    return known;
+  }
+  const lyrics = await backend.lyrics(uri);
+  lyricsMemo.set(uri, lyrics);
+  while (lyricsMemo.size > LYRICS_KEPT) lyricsMemo.delete(lyricsMemo.keys().next().value as string);
+  return lyrics;
+}
+
+/** A track's lyrics, with the URI they are of: a resource keeps its last
+ * value while the next track's load runs, so readers compare it. Nothing
+ * loads without a track; a failed load tries again with the next epoch (a
+ * new token). */
+export function lyricsQuery(trackUri: () => string): Resource<{ uri: string; lyrics: Lyrics }> {
+  return resource(
+    () => {
+      const uri = trackUri();
+      return uri ? { uri, epoch: dataEpoch() } : null;
+    },
+    async (s) => ({ uri: s.uri, lyrics: await loadLyrics(s.uri) }),
+  );
 }

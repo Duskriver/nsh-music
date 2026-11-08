@@ -497,3 +497,30 @@ test("the time comes from the element that is the bar's track, not another one",
   // No bar: a playing element.
   assert.deepEqual(B.timeOf([old, playing], null), { positionMs: 61000, durationMs: 200000 });
 });
+
+test("lyricsOf reads timed and plain lines, and none", () => {
+  const timed = B.lyricsOf({
+    lyrics: {
+      syncType: "LINE_SYNCED",
+      providerDisplayName: "Musixmatch",
+      lines: [
+        { startTimeMs: "1200", words: "First line" },
+        { startTimeMs: "4800", words: "♪" },
+        { startTimeMs: "9100", words: " Second line " },
+        { startTimeMs: "12000", words: "" },
+      ],
+    },
+  });
+  assert.deepEqual(timed, {
+    synced: true,
+    provider: "Musixmatch",
+    lines: [
+      { startMs: 1200, words: "First line" },
+      { startMs: 4800, words: "♪" },
+      { startMs: 9100, words: "Second line" },
+    ],
+  });
+  const plain = B.lyricsOf({ lyrics: { syncType: "UNSYNCED", provider: "lyricfind", lines: [{ startTimeMs: "0", words: "Only words" }] } });
+  assert.deepEqual(plain, { synced: false, provider: "lyricfind", lines: [{ startMs: 0, words: "Only words" }] });
+  assert.deepEqual(B.lyricsOf(null), { synced: false, lines: [], provider: "" });
+});

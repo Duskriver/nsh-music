@@ -163,6 +163,40 @@ export interface Me {
   image: string;
 }
 
+/** One line of lyrics. */
+export interface LyricLine {
+  /** When it starts, ms into the track (0 when the lyrics are not timed). */
+  startMs: number;
+  /** Its words ("♪" for an instrumental break). */
+  words: string;
+}
+
+/** A track's lyrics: no lines when there are none. */
+export interface Lyrics {
+  /** Whether each line has its time (else they are plain words). */
+  synced: boolean;
+  lines: LyricLine[];
+  /** Who provides them, shown under them; may be empty. */
+  provider: string;
+}
+
+/** The line of `lyrics` sung at `ms`: the last that started by then, or -1
+ * before the first (and always for plain words). */
+export function lineAt(lyrics: Lyrics, ms: number): number {
+  if (!lyrics.synced) return -1;
+  let lo = 0;
+  let hi = lyrics.lines.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lyrics.lines[mid].startMs <= ms) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found;
+}
+
 // ---- The contract --------------------------------------------------------
 
 /** What plays the music. Every method that does something returns a
@@ -193,6 +227,8 @@ export interface Backend {
   /** A cover image's colours (`#rrggbb`), most telling first; empty when
    * unknown. */
   coverColors(imageUrl: string): Promise<string[]>;
+  /** A track's lyrics by URI (no lines when it has none). */
+  lyrics(trackUri: string): Promise<Lyrics>;
 
   // Controls: each sets a target state.
   toggle(): Promise<void>;

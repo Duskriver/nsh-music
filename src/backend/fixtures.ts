@@ -3,7 +3,7 @@
 // `demo: "rich"` host parameter, for performance runs) gives everything a
 // cover and makes the library as large as a real one.
 
-import type { Collection, Home, Item, Library, Track } from "./types";
+import type { Collection, Home, Item, Library, Lyrics, Track } from "./types";
 import cover00 from "./demo-covers/cover-00.jpg";
 import cover01 from "./demo-covers/cover-01.jpg";
 import cover02 from "./demo-covers/cover-02.jpg";
@@ -269,6 +269,29 @@ export function search(query: string) {
     albums: ITEMS.filter((i) => i.kind === "album" && (has(i.name) || has(i.subtitle))),
     playlists: ITEMS.filter((i) => i.kind === "playlist" && has(i.name)),
   };
+}
+
+const VERSES = [
+  "♪",
+  "Streetlights hum a quiet tune",
+  "Paper boats along the river",
+  "We were waiting for the noon",
+  "♪",
+  "Every window holds a summer",
+  "Every summer holds a name",
+  "Carry me across the harbor",
+  "I will never be the same",
+  "♪",
+  "Streetlights hum a quiet tune",
+  "And the night lets us go home",
+];
+
+/** A track's lyrics: made-up lines every four seconds; Low Harbor's songs
+ * have none (an instrumental band), so that state shows too. */
+export function lyrics(trackUri: string): Lyrics {
+  const track = ALL_TRACKS.find((t) => t.uri === trackUri);
+  if (!track || track.artists === LOW_HARBOR.name) return { synced: false, lines: [], provider: "" };
+  return { synced: true, provider: "Demo", lines: VERSES.map((words, i) => ({ startMs: i * 4000, words })) };
 }
 
 /** The demo's ad: a made-up sponsor. */

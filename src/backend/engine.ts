@@ -18,6 +18,7 @@ import {
   type Health,
   type Home,
   type Library,
+  type Lyrics,
   type Me,
   type PlayerState,
   type RepeatMode,
@@ -160,6 +161,11 @@ export class EngineBackend implements Backend {
     if (!imageUrl) return [];
     const color = await call(() => this.#spotify.colors(imageUrl));
     return color.palette.length ? color.palette : color.hex ? [color.hex] : [];
+  }
+
+  async lyrics(trackUri: string): Promise<Lyrics> {
+    const l = await call(() => this.#spotify.lyrics(trackUri));
+    return { synced: l.synced, provider: l.provider, lines: l.lines.map((line) => ({ startMs: line.startMs, words: line.words })) };
   }
 
   async me(): Promise<Me> {

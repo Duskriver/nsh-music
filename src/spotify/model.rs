@@ -165,6 +165,28 @@ pub struct CoverColor {
     pub palette: Vec<String>,
 }
 
+/// A track's lyrics.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[serde(default)]
+pub struct Lyrics {
+    /// Whether each line has its time (else they are plain words).
+    pub synced: bool,
+    /// The lines in order; none when Spotify has no lyrics for the track.
+    pub lines: Vec<LyricLine>,
+    /// Who provides them (shown under them, as Spotify does), or empty.
+    pub provider: String,
+}
+
+/// One line of lyrics.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LyricLine {
+    /// When it starts, ms into the track (0 when the lyrics are not timed).
+    pub start_ms: f64,
+    /// Its words ("♪" for an instrumental break).
+    pub words: String,
+}
+
 /// How the player repeats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, PropEnum)]
 #[serde(rename_all = "camelCase")]

@@ -115,6 +115,8 @@ pub enum Command {
     PlayTrack(String),
     /// The extracted color of a cover image (Spotify's own).
     Colors(String),
+    /// A track's lyrics, by its URI.
+    Lyrics(String),
 }
 
 impl Command {
@@ -143,6 +145,7 @@ impl Command {
             Command::PlayContext { .. } => "playContext",
             Command::PlayTrack(_) => "playTrack",
             Command::Colors(_) => "colors",
+            Command::Lyrics(_) => "lyrics",
         }
     }
 
@@ -154,7 +157,8 @@ impl Command {
             | Command::Album(s)
             | Command::Artist(s)
             | Command::PlayTrack(s)
-            | Command::Colors(s) => {
+            | Command::Colors(s)
+            | Command::Lyrics(s) => {
                 json!([s])
             }
             Command::Seek(ms) => json!([ms.max(0.0).round()]),
@@ -180,6 +184,7 @@ impl Command {
                 | Command::Library
                 | Command::Me
                 | Command::Colors(_)
+                | Command::Lyrics(_)
         )
     }
 

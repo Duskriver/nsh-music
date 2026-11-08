@@ -23,6 +23,30 @@ fn parse(text: &str) -> Value {
     serde_json::from_str(text).expect("a fixture is JSON")
 }
 
+/// Made-up lyrics, timed every four seconds, for any track.
+fn demo_lyrics() -> Value {
+    const WORDS: [&str; 12] = [
+        "♪",
+        "Streetlights hum a quiet tune",
+        "Paper boats along the river",
+        "We were waiting for the noon",
+        "♪",
+        "Every window holds a summer",
+        "Every summer holds a name",
+        "Carry me across the harbor",
+        "I will never be the same",
+        "♪",
+        "Streetlights hum a quiet tune",
+        "And the night lets us go home",
+    ];
+    let lines: Vec<Value> = WORDS
+        .iter()
+        .enumerate()
+        .map(|(i, words)| json!({ "startMs": i as f64 * 4000.0, "words": words }))
+        .collect();
+    json!({ "synced": true, "lines": lines, "provider": "Demo" })
+}
+
 /// What the demo's bridge answers to `command`.
 pub fn answer(command: &Command) -> Answer {
     match command {
@@ -37,6 +61,7 @@ pub fn answer(command: &Command) -> Answer {
         }
         Command::Me => Ok(json!({ "id": "demo", "name": "Demo Listener", "username": "demo", "image": "" })),
         Command::Colors(_) => Ok(json!({ "hex": "", "palette": [] })),
+        Command::Lyrics(_) => Ok(demo_lyrics()),
         Command::Library => {
             let home = parse(HOME);
             let mut items = vec![json!({

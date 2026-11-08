@@ -37,7 +37,7 @@
   "use strict";
 
   const PROTOCOL = 1;
-  const REVISION = 5;
+  const REVISION = 6;
   // Liked Songs' cover: the library reports it; the tracks query does not.
   const LIKED_IMAGE = "https://misc.scdn.co/liked-songs/liked-songs-640.png";
   let likedImage = "";
@@ -179,6 +179,20 @@
 
   const kindOf = (uri) => (uri || "").split(":")[1] || "";
   const idOf = (uri) => (uri || "").split(":")[2] || "";
+
+  // A track's lyrics from Spotify's color-lyrics answer: whether its lines
+  // are timed (`LINE_SYNCED`), each line's start in ms and its words (an
+  // instrumental break, empty, as "♪"), and who provides them. No lyrics:
+  // no lines.
+  const lyricsOf = (json) => {
+    const l = json && json.lyrics;
+    if (!l || !Array.isArray(l.lines)) return { synced: false, lines: [], provider: "" };
+    const synced = l.syncType === "LINE_SYNCED";
+    const lines = l.lines
+      .map((line) => ({ startMs: synced ? Number(line && line.startTimeMs) || 0 : 0, words: String((line && line.words) || "").trim() || "♪" }))
+      .filter((line, i, all) => !(line.words === "♪" && i === all.length - 1));
+    return { synced, lines, provider: l.providerDisplayName || l.provider || "" };
+  };
   const trackIdFromHref = (href) => {
     const text = String(href || "");
     const m = /\/track\/([A-Za-z0-9]+)/.exec(text) || /spotify(?::|%3A)track(?::|%3A)([A-Za-z0-9]+)/i.exec(text);
@@ -845,6 +859,27 @@
         ]);
         return { hex, palette: palette.length ? palette : hex ? [hex] : [] };
       },
+
+      // A track's lyrics (see `lyricsOf`), as the web player's lyrics view
+      // loads them; none (no lines) when Spotify has none for it.
+      async lyrics(trackUri) {
+        const id = idOf(trackUri);
+        if (kindOf(trackUri) !== "track" || !id) return lyricsOf(null);
+        if (!shared.headers) await waitFor(() => shared.headers, 20000);
+        if (!shared.headers) throw fail("E_NO_AUTH", "the web player has not signed its requests yet");
+        let response;
+        try {
+          response = await pageFetch.call(win, "https://spclient.wg.spotify.com/color-lyrics/v2/track/" + id + "?format=json&vocalRemoval=false&market=from_token", {
+            headers: Object.assign({ accept: "application/json" }, shared.headers, { "app-platform": shared.headers["app-platform"] || "WebPlayer" }),
+          });
+        } catch (error) {
+          throw fail("E_NETWORK", "lyrics: " + ((error && error.message) || error));
+        }
+        if (response.status === 404 || response.status === 204) return lyricsOf(null);
+        if (response.status === 401) throw fail("E_NO_AUTH", "lyrics: HTTP 401");
+        if (!response.ok) throw fail("E_HTTP", "lyrics: HTTP " + response.status);
+        return lyricsOf(await response.json());
+      },
     };
 
     // --- The player: its state -----------------------------------------------
@@ -1280,6 +1315,7 @@
     settle,
     createHashCache,
     paletteOf,
+    lyricsOf,
     item,
     track,
     likedTrack,

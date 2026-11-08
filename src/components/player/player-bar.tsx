@@ -3,10 +3,10 @@
 
 import { effect, Text, token, View, windowSize } from "nsh";
 import { Button } from "nsh/base";
-import { setNowPlayingOpen } from "../../state/overlays";
+import { openLyrics, setNowPlayingOpen } from "../../state/overlays";
 import { hasTrack, player, toggle } from "../../state/player";
 import { ready } from "../../state/session";
-import { Cover, focusRing, PlayButton } from "../ui/controls";
+import { Cover, focusRing, IconButton, PlayButton } from "../ui/controls";
 import { coverColorsQuery } from "../../data/queries";
 import { setCoverTint } from "../../state/tint";
 import { lightEffect } from "../../state/visual";
@@ -92,8 +92,10 @@ export function PlayerBar() {
           <SeekBar inline quiet />
         </View>
         <View class="w-1/4 flex-row items-center justify-end gap-1 pr-2">
-          {/* The volume always shows its slider here, balancing what plays on
-              the left; the light's menu at the very end. */}
+          {/* The lyrics (in Now Playing); the volume always shows its slider
+              here, balancing what plays on the left; the light's menu at the
+              very end. */}
+          <IconButton name="microphone" label="Lyrics" hint disabled={!hasTrack()} onPress={openLyrics} />
           <VolumeControl quiet />
           <LightMenu placement="top" />
         </View>

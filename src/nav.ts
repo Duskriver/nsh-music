@@ -39,12 +39,35 @@ export function switchTo(route: Route): void {
   }, 400);
 }
 
+/** The most pages kept above the root. Each page in the stack stays alive
+ * (its list, its views, its covers), so a stack that only grew would hold
+ * every page visited: past this, the oldest go once the new page is in.
+ * Their data stays cached, so going to one again shows it at once; only
+ * Back no longer reaches it. */
+export const MAX_PAGES = 4;
+/** After a push's slide, so trimming the bottom does not disturb it. */
+const TRIM_AFTER_MS = 600;
+let trimTimer: ReturnType<typeof setTimeout> | null = null;
+
+function trimSoon(): void {
+  if (trimTimer !== null) clearTimeout(trimTimer);
+  trimTimer = setTimeout(() => {
+    trimTimer = null;
+    const routes = nav.routes();
+    if (routes.length <= MAX_PAGES + 1) return;
+    // The same route objects: the stack keeps the pages it still has.
+    // What is ahead stays: nothing on top changed.
+    intent = { kind: "keep" };
+    nav.setRoutes([routes[0], ...routes.slice(routes.length - MAX_PAGES)]);
+  }, TRIM_AFTER_MS);
+}
+
 /** Routes Back took off, the next Forward last. */
 const ahead = signal<Route[]>([]);
 /** What the app's own change of the stack means for what is ahead: Forward
  * keeps the rest, opening a page or a root clears it. Read by the effect
  * below when it sees the change. */
-let intent: { kind: "forward"; route: Route } | { kind: "clear" } | null = null;
+let intent: { kind: "forward"; route: Route } | { kind: "clear" } | { kind: "keep" } | null = null;
 let previous: readonly Route[] = nav.routes();
 
 // Hear every change of the stack, the system's back included: a pop puts
@@ -60,6 +83,7 @@ effect(() => {
       ahead.set([]);
       return;
     }
+    if (mine?.kind === "keep") return;
     if (mine?.kind === "forward" && routes[routes.length - 1] === mine.route) return;
     const popped = routes.length < before.length && routes.every((r, i) => r === before[i]);
     if (popped) ahead.update((a) => [...a, ...before.slice(routes.length).reverse()]);
@@ -109,6 +133,7 @@ export function open(route: Route): void {
   }
   intent = { kind: "clear" };
   nav.push(route);
+  trimSoon();
 }
 
 /** Whether Back has a page to go to (tracked). */
@@ -127,6 +152,7 @@ export function forward(): void {
   ahead.update((a) => a.slice(0, -1));
   intent = { kind: "forward", route: next };
   nav.push(next);
+  trimSoon();
 }
 
 /** Back to Home, with nothing ahead (signing out). */

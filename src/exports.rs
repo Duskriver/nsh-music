@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::spotify::{
-    Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Me, Player, Repeat, SearchResults, Session, Snapshot,
+    Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, Player, Repeat, SearchResults, Session, Snapshot,
     bridge::{self, Command},
     engine,
 };
@@ -204,6 +204,11 @@ impl Spotify {
     /// cover-tinted backdrops.
     pub async fn colors(this: Instance<Self>, image_url: String) -> Result<CoverColor, String> {
         data(this, Command::Colors(image_url)).await
+    }
+
+    /// A track's lyrics by URI (no lines when Spotify has none).
+    pub async fn lyrics(this: Instance<Self>, track_uri: String) -> Result<Lyrics, String> {
+        data(this, Command::Lyrics(track_uri)).await
     }
 
     // --- Controls --------------------------------------------------------------
