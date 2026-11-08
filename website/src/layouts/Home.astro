@@ -9,19 +9,41 @@ const asset = (path: string) => `${base}/${path}`;
 const repo = 'https://github.com/huacnlee/spotish';
 const sponsor = 'https://github.com/sponsors/huacnlee';
 const canonical = new URL(asset(language === 'en' ? '' : 'zh-CN/'), Astro.site);
+// More of the app: two pages side by side, Now Playing across, then a
+// narrow window and its Now Playing.
+const screens = [
+  { file: 'screen-artist.png', alt: t.screens.artist },
+  { file: 'screen-liked.png', alt: t.screens.liked },
+  { file: 'screen-now-playing.png', alt: t.screens.nowPlaying, wide: true },
+  { file: 'screen-narrow.png', alt: t.screens.narrow },
+  { file: 'screen-now-playing-narrow.png', alt: t.screens.nowPlayingNarrow },
+];
+// Every mention of NSH in the copy links to it.
+const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const nsh = (text: string) => escape(text).replace(/\bNSH\b/g, '<a class="nsh-link" href="https://nsh.dev">NSH</a>');
+// One line installs it: the shell script on macOS and Linux, PowerShell on
+// Windows (both check the release's checksum).
+const site = 'https://huacnlee.github.io/spotish';
+const commands = [
+  { id: 'unix', label: t.installUnix, command: `curl -fsSL ${site}/install.sh | bash`, href: `${repo}/blob/main/install.sh` },
+  { id: 'windows', label: t.installWindows, command: `irm ${site}/install.ps1 | iex`, href: `${repo}/blob/main/install.ps1` },
+];
 const related = [
   { name: 'NSH', href: 'https://nsh.dev', description: t.relatedDescriptions.nsh },
-  { name: 'Omasend', href: 'https://github.com/huacnlee/omasend', description: t.relatedDescriptions.omasend },
-  { name: 'Noop', href: 'https://github.com/huacnlee/noop', description: t.relatedDescriptions.noop },
+  { name: 'Omasend', href: 'https://huacnlee.github.io/omasend/', description: t.relatedDescriptions.omasend },
+  { name: 'Omamail', href: 'https://huacnlee.github.io/omamail/', description: t.relatedDescriptions.omamail },
+  { name: 'Noop', href: 'https://huacnlee.github.io/noop/', description: t.relatedDescriptions.noop },
+  { name: 'Disktree', href: 'https://huacnlee.github.io/disktree/', description: t.relatedDescriptions.disktree },
+  { name: 'huacnlee/cargo', href: 'https://huacnlee.github.io/cargo/', description: t.relatedDescriptions.cargo },
 ];
 ---
 <!doctype html>
-<html lang={language} data-theme="tokyo-night">
+<html lang={language} data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={t.intro} />
-    <meta name="theme-color" content="#121212" />
+    <meta name="theme-color" content="#0b0b0f" />
     <title>Spotish — {t.eyebrow}</title>
     <link rel="canonical" href={canonical} />
     <link rel="alternate" hreflang="en" href={new URL(asset(''), Astro.site)} />
@@ -36,30 +58,62 @@ const related = [
     <script is:inline>
       let mode;
       try { mode = localStorage.getItem('spotish-mode'); } catch {}
-      document.documentElement.dataset.theme = (mode === 'light') ? 'flexoki-light' : (mode === 'dark' ? 'tokyo-night' : (matchMedia('(prefers-color-scheme: light)').matches ? 'flexoki-light' : 'tokyo-night'));
+      document.documentElement.dataset.theme = (mode === 'light' || mode === 'dark') ? mode : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
     </script>
     <style>
+      /* A quiet band, not a card: hairlines above and below, the line
+         centred, muted like the page's other fine print. */
+      .quick-install{padding:0 0 40px}
+      .install-requirements{margin:14px 0 0;font-size:12px;color:var(--muted)}
+      .notice-banner{display:flex;align-items:center;justify-content:center;gap:10px;margin:0 0 32px;padding:14px 0;border-block:1px solid var(--subtle);color:var(--muted)}
+      .notice-banner p{margin:0;min-width:0;font-size:12px;line-height:1.7;color:var(--warn);text-align:center;white-space:pre-line}
+      @media(max-width:680px){.notice-banner p{text-align:left}}
       .hero-art{margin-top:28px;border:1px solid var(--subtle);border-radius:16px;overflow:hidden;background:var(--deep)}
+      .nsh-link{color:inherit;text-underline-offset:4px;text-decoration-color:color-mix(in srgb,currentColor 40%,transparent)}
+      .nsh-link:hover{text-decoration-color:currentColor}
       .hero-art img{display:block;width:100%;height:auto}
+      .shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:8px 0 48px}
+      .shots figure{margin:0;display:flex;flex-direction:column;gap:10px}
+      .shots img{display:block;width:100%;height:auto;border:1px solid var(--subtle);border-radius:12px;background:var(--deep)}
+      .shots figcaption{font-size:13px;color:var(--muted)}
+      .shots .wide{grid-column:1 / -1}
+      @media(max-width:680px){.shots{grid-template-columns:1fr}.shots .wide{grid-column:auto}}
       .feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px;background:var(--subtle);border:1px solid var(--subtle);border-radius:14px;overflow:hidden}
       .feature-grid>div{background:var(--bg);padding:22px}
       .feature-grid h3{margin:0 0 6px;font-size:16px}
       .feature-grid p{margin:0;font-size:14px}
       .callout{border:1px solid var(--border);border-radius:14px;padding:24px;background:var(--deep)}
       .callout .actions{margin-top:16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
-      .btn{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:10px 20px;font-weight:600;font-size:14px;text-decoration:none}
-      .btn-primary{background:var(--brand);color:var(--brand-ink)}
-      .btn-outline{border:1px solid var(--border);color:var(--text)}
+      /* As the app's ActionButton: a 36pt pill, bold small label; the
+         primary one solid white (the text colour), never green; the other
+         a quiet surface with a fine border. Hover brings a wash in, a press
+         takes it to 0.97 on the smooth-out curve. */
+      .btn{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;border-radius:999px;padding:0 20px;font-weight:700;font-size:14px;line-height:1;text-decoration:none;transition:transform 180ms cubic-bezier(.22,1,.36,1),border-color 120ms ease-out,box-shadow 120ms ease-out}
+      .btn::after{content:"";position:absolute;inset:0;border-radius:inherit;background:currentColor;opacity:0;transition:opacity 120ms ease-out;pointer-events:none}
+      .btn:hover::after{opacity:.1}
+      .btn:active{transform:scale(.97)}
+      .btn:active::after{opacity:.15}
+      .btn-primary{background:var(--text);color:var(--bg);box-shadow:0 1px 2px rgb(0 0 0/.2)}
+      .btn-primary:hover{box-shadow:0 2px 6px rgb(0 0 0/.25)}
+      .btn-outline{border:1px solid var(--border);background:var(--surface);color:var(--text)}
+      .btn-outline:hover{border-color:var(--muted)}
+      /* Sponsor keeps GitHub Sponsors' pink. */
       .btn-sponsor{background:#db61a2;color:#fff}
+      @media(prefers-reduced-motion:reduce){.btn,.btn::after{transition:none}.btn:active{transform:none}}
       .sponsor-card{display:flex;gap:20px;align-items:center;flex-wrap:wrap;justify-content:space-between;border:1px solid var(--border);border-radius:14px;padding:24px;background:var(--deep)}
       .hero .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}
-      .brand-dot{width:22px;height:22px;border-radius:50%;background:var(--brand);display:inline-block}
+      .premium-note{margin-top:14px;font-size:13px;color:var(--secondary)}
+      .premium-note a{color:var(--text)}
+      .platforms{margin:20px 0 0;padding:0;list-style:none;display:grid;gap:10px}
+      .platforms li{font-size:14px;color:var(--secondary)}
+      .platforms strong{color:var(--text);font-weight:600}
+      .legal{flex-basis:100%;font-size:12px;color:var(--muted)}
     </style>
   </head>
   <body>
     <a class="skip" href="#main">{t.skip}</a>
     <header><div class="shell nav-row">
-      <a href={asset(language === 'en' ? '' : 'zh-CN/')} class="brand" aria-label="Spotish"><span class="brand-dot" aria-hidden="true"></span>Spotish</a>
+      <a href={asset(language === 'en' ? '' : 'zh-CN/')} class="brand" aria-label="Spotish"><svg class="brand-mark" width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="mark-tile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5ff08f"/><stop offset="0.5" stop-color="#1ed760"/><stop offset="1" stop-color="#14833b"/></linearGradient><linearGradient id="mark-gloss" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#mark-tile)"/><path d="M8 0h16a8 8 0 0 1 8 8v4.5C24 15.5 8 15.5 0 12.5V8a8 8 0 0 1 8-8z" fill="url(#mark-gloss)"/><g fill="#04130a"><rect x="8" y="13" width="4" height="11" rx="2"/><rect x="14" y="8" width="4" height="16" rx="2"/><rect x="20" y="16" width="4" height="8" rx="2"/></g></svg>Spotish</a>
       <nav aria-label={t.nav}>
         <a class="text-link" href={sponsor}>{t.sponsor}</a>
         <a class="icon-control" href={repo} aria-label="GitHub" title="GitHub"><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24' width='20' height='20'><path d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/></svg></a>
@@ -70,28 +124,51 @@ const related = [
     <main id="main" class="shell">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow">{t.eyebrow}</p>
+          <p class="eyebrow" set:html={nsh(t.eyebrow)} />
           <h1 id="hero-title">{t.title}</h1>
-          <p class="intro">{t.intro}</p>
+          <p class="intro" set:html={nsh(t.intro)} />
           <div class="actions">
             <a class="btn btn-primary" href={repo}>{t.getIt} <span aria-hidden="true">↗</span></a>
             <a class="btn btn-sponsor" href={sponsor}>♥ {t.sponsor}</a>
           </div>
-          <p class="note">{t.note}</p>
+          <p class="premium-note">{t.premiumNote} {t.premium.replace('Spotify Premium', '')}<a class="text-link" href="https://www.spotify.com/premium/">Spotify Premium ↗</a></p>
         </div>
         <figure class="hero-art">
           <img src={asset('screenshot.png')} alt={t.screenshot} loading="eager" decoding="async" />
         </figure>
       </section>
 
+      {/* How it plays (Spotify's own web player, its ads kept) and whose
+          trademark Spotify is: a band across the page. */}
+      <aside class="notice-banner" aria-label={t.noticeLabel}>
+        <p>{t.artCredit}</p>
+      </aside>
+
+      <section id="install" class="quick-install" aria-labelledby="install-title">
+        <div class="install-heading"><h2 id="install-title">{t.install}</h2><div class="install-tabs" role="tablist" aria-label={t.installTabs}>
+          {commands.map(({ id, label }, index) => <button id={`tab-${id}`} type="button" role="tab" aria-controls={`panel-${id}`} aria-selected={index === 0 ? 'true' : 'false'} tabindex={index === 0 ? 0 : -1}>{label}</button>)}
+        </div></div>
+        {commands.map(({ id, command, href }, index) => <div id={`panel-${id}`} role="tabpanel" aria-labelledby={`tab-${id}`} tabindex="0" hidden={index !== 0}>
+          <div class="command-block"><pre id={`command-${id}`}><code>{command}</code></pre><button type="button" class="copy-button" data-copy={`command-${id}`} data-copied={t.copied} data-error={t.copyFailed}>{t.copy}</button></div>
+          <div class="install-meta"><p>{t.installNote}</p><a class="script-link" href={href}>{t.readScript} ↗</a></div>
+        </div>)}
+        <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+        <p class="install-requirements">{t.installRequirements}</p>
+      </section>
+
+      <section class="shots" aria-label={t.screensLabel}>
+        {screens.map(s => <figure class={s.wide ? 'wide' : undefined}><img src={asset(s.file)} alt={s.alt} loading="lazy" decoding="async" /><figcaption>{s.alt}</figcaption></figure>)}
+      </section>
+
       <section id="how" class="section">
         <div class="section-heading"><span class="index" aria-hidden="true">01 /</span><h2>{t.how}</h2><p>{t.howIntro}</p></div>
-        <ol class="steps">{t.steps.map(([title, body], i) => <li><span class="step-number" aria-hidden="true">0{i + 1}</span><div><h3>{title}</h3><p>{body}</p></div><span class="step-symbol" aria-hidden="true">{['↓','→','↗'][i]}</span></li>)}</ol>
+        <ol class="steps">{t.steps.map(([title, body], i) => <li><span class="step-number" aria-hidden="true">0{i + 1}</span><div><h3>{title}</h3><p set:html={nsh(body)} /></div><span class="step-symbol" aria-hidden="true">{['↓','→','↗'][i]}</span></li>)}</ol>
       </section>
 
       <section class="section">
-        <div class="section-heading"><span class="index" aria-hidden="true">02 /</span><h2>{t.features}</h2><p>{t.featuresIntro}</p></div>
-        <div class="feature-grid">{t.facts.map(([title, body]) => <div><h3>{title}</h3><p>{body}</p></div>)}</div>
+        <div class="section-heading"><span class="index" aria-hidden="true">02 /</span><h2>{t.features}</h2><p set:html={nsh(t.featuresIntro)} /></div>
+        <div class="feature-grid">{t.facts.map(([title, body]) => <div><h3>{title}</h3><p set:html={nsh(body)} /></div>)}</div>
+        <ul class="platforms" aria-label={t.platformsLabel}>{t.platforms.map(([name, body]) => <li><strong>{name}</strong> — {body}</li>)}</ul>
       </section>
 
       <section class="section">
@@ -106,7 +183,7 @@ const related = [
       </section>
 
       <section class="section">
-        <div class="section-heading"><span class="index" aria-hidden="true">04 /</span><h2>{t.nsh}</h2><p>{t.nshBody}</p></div>
+        <div class="section-heading"><span class="index" aria-hidden="true">04 /</span><h2 set:html={nsh(t.nsh)} /><p set:html={nsh(t.nshBody)} /></div>
         <p class="foundation"><a class="text-link" href="https://nsh.dev">nsh.dev ↗</a></p>
       </section>
 
@@ -123,16 +200,50 @@ const related = [
         <ul>{related.map(p => <li><a href={p.href}>{p.name} <span aria-hidden="true">↗</span></a><p>{p.description}</p></li>)}</ul>
       </section>
     </main>
-    <footer><div class="shell"><span>Spotish · {t.footer}</span><span>{t.built} <a class="text-link" href="https://nsh.dev">NSH</a> · <a class="text-link" href={repo}>{t.source}</a></span></div></footer>
+    <footer><div class="shell"><span>Spotish · {t.footer}</span><span>{t.built} <a class="text-link" href="https://nsh.dev">NSH</a> · <a class="text-link" href={repo}>{t.source}</a></span><p class="legal">{t.trademark}</p></div></footer>
     <script>
       const root = document.documentElement;
       const toggle = document.querySelector('#theme-toggle');
       function apply(light) {
-        root.dataset.theme = light ? 'flexoki-light' : 'tokyo-night';
-        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#fffcf0' : '#121212');
+        root.dataset.theme = light ? 'light' : 'dark';
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#fcfbfa' : '#0b0b0f');
+      }
+      // Install: the tabs (arrow keys move between them) and Copy.
+      const tabs = [...document.querySelectorAll('.install-tabs [role=tab]')];
+      function select(tab) {
+        for (const other of tabs) {
+          const on = other === tab;
+          other.setAttribute('aria-selected', String(on));
+          other.tabIndex = on ? 0 : -1;
+          document.getElementById(other.getAttribute('aria-controls')).hidden = !on;
+        }
+      }
+      tabs.forEach((tab, i) => {
+        tab.addEventListener('click', () => select(tab));
+        tab.addEventListener('keydown', (e) => {
+          const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+          if (!step) return;
+          const next = tabs[(i + step + tabs.length) % tabs.length];
+          select(next);
+          next.focus();
+        });
+      });
+      // Windows visitors start on the PowerShell line.
+      if (/Windows/.test(navigator.userAgent)) { const win = tabs.find((t) => t.id === 'tab-windows'); if (win) select(win); }
+      const status = document.getElementById('copy-status');
+      for (const button of document.querySelectorAll('.copy-button')) {
+        const label = button.textContent;
+        button.addEventListener('click', async () => {
+          const text = document.getElementById(button.dataset.copy)?.textContent ?? '';
+          let done = true;
+          try { await navigator.clipboard.writeText(text); } catch { done = false; }
+          button.textContent = done ? button.dataset.copied : button.dataset.error;
+          if (status) status.textContent = button.textContent;
+          setTimeout(() => { button.textContent = label; }, 1600);
+        });
       }
       toggle?.addEventListener('click', () => {
-        const light = root.dataset.theme !== 'flexoki-light';
+        const light = root.dataset.theme !== 'light';
         try { localStorage.setItem('spotish-mode', light ? 'light' : 'dark'); } catch {}
         apply(light);
       });

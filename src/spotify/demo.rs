@@ -2,9 +2,16 @@
 //! player: what the tests run on, and `SPOTISH_DEMO=1` shows (the look of
 //! the app without an account).
 
-use serde_json::{Value, json};
+use std::thread::JoinHandle;
 
-use super::{PlayerState, Repeat, Session, model::Track};
+use serde_json::{Value, json};
+use tokio::sync::watch;
+
+use super::{
+    bridge::Command,
+    model::{Player, Repeat, Track},
+    session::{Answer, Session, Snapshot},
+};
 
 const HOME: &str = include_str!("fixtures/home.json");
 const SEARCH: &str = include_str!("fixtures/search.json");
@@ -16,21 +23,21 @@ fn parse(text: &str) -> Value {
     serde_json::from_str(text).expect("a fixture is JSON")
 }
 
-/// What the demo's bridge answers to `name`.
-pub fn answer(name: &str, args: &Value) -> Result<Value, String> {
-    let uri = args[0].as_str().unwrap_or_default();
-    match name {
-        "home" => Ok(parse(HOME)),
-        "search" => {
-            let term = uri.trim().to_lowercase();
+/// What the demo's bridge answers to `command`.
+pub fn answer(command: &Command) -> Answer {
+    match command {
+        Command::Home => Ok(parse(HOME)),
+        Command::Search(term) => {
+            let term = term.trim().to_lowercase();
             if term.is_empty() || term == "nothing at all" {
                 Ok(json!({ "tracks": [], "artists": [], "albums": [], "playlists": [] }))
             } else {
                 Ok(parse(SEARCH))
             }
         }
-        "me" => Ok(json!({ "name": "Demo Listener", "username": "demo", "image": "" })),
-        "library" => {
+        Command::Me => Ok(json!({ "id": "demo", "name": "Demo Listener", "username": "demo", "image": "" })),
+        Command::Colors(_) => Ok(json!({ "hex": "", "palette": [] })),
+        Command::Library => {
             let home = parse(HOME);
             let mut items = vec![json!({
                 "uri": "spotify:collection:tracks", "kind": "collection", "name": "Liked Songs",
@@ -45,10 +52,10 @@ pub fn answer(name: &str, args: &Value) -> Result<Value, String> {
             }
             Ok(json!({ "items": items }))
         }
-        "playlist" => Ok(parse(PLAYLIST)),
-        "album" => Ok(parse(ALBUM)),
-        "artist" => Ok(parse(ARTIST)),
-        "likedSongs" => {
+        Command::Playlist(_) => Ok(parse(PLAYLIST)),
+        Command::Album(_) => Ok(parse(ALBUM)),
+        Command::Artist(_) => Ok(parse(ARTIST)),
+        Command::LikedSongs => {
             let mut album = parse(ALBUM);
             album["header"] = json!({
                 "uri": "spotify:collection:tracks", "kind": "collection", "name": "Liked Songs",
@@ -56,38 +63,111 @@ pub fn answer(name: &str, args: &Value) -> Result<Value, String> {
             });
             Ok(album)
         }
-        "toggle" | "play" | "pause" | "next" | "previous" | "shuffle" | "repeat" | "like" | "mute" | "seek"
-        | "volume" | "playContext" | "playTrack" => Ok(Value::Bool(true)),
-        _ => Err(format!("the demo has no {name}")),
+        _ => Ok(Value::Null),
     }
 }
 
+/// What a control does to the demo's player; true when it changed it.
+pub fn control(player: &mut Player, command: &Command) -> bool {
+    let before = player.clone();
+    match command {
+        Command::Toggle => player.playing = !player.playing,
+        Command::Play => player.playing = true,
+        Command::Pause => player.playing = false,
+        Command::Seek(ms) => player.position_ms = ms.clamp(0.0, player.duration_ms),
+        Command::SetVolume(v) => player.volume = v.clamp(0.0, 1.0),
+        Command::SetShuffle(on) => player.shuffle = *on,
+        Command::SetRepeat(mode) => player.repeat = *mode,
+        Command::SetLiked(on) => player.liked = *on,
+        Command::SetMuted(on) => player.muted = *on,
+        Command::PlayContext { .. } | Command::PlayTrack(_) => player.playing = true,
+        _ => {}
+    }
+    if *player != before {
+        player.at = now_ms();
+        true
+    } else {
+        false
+    }
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
+}
+
 /// The demo's player: the first track of the recorded album, paused.
-pub fn player() -> PlayerState {
+pub fn player() -> Player {
     let album: Value = parse(ALBUM);
     let track: Track = serde_json::from_value(album["tracks"][0].clone()).unwrap_or_default();
-    PlayerState {
-        signed_in: true,
+    Player {
         title: track.name,
         artist: track.artists,
         album: track.album,
         artwork: track.image,
         track_uri: track.uri,
+        context_href: "/album/6dVIqQ8qmQ5GBnJ9shOYGE".into(),
         playing: false,
         can_play: true,
-        position_ms: 64_000,
+        position_ms: 64_000.0,
         duration_ms: track.duration_ms,
+        at: now_ms(),
         shuffle_available: true,
         repeat: Repeat::Off,
         volume: 0.7,
         can_next: true,
         can_previous: true,
-        premium: false,
-        ..PlayerState::default()
+        premium: Some(false),
+        ..Player::default()
     }
 }
 
 /// A session on the demo's data.
-pub fn session() -> (Session, tokio::sync::mpsc::UnboundedReceiver<super::Event>) {
-    Session::fake(answer, player())
+pub fn session() -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
+    Session::fake(answer, control, player())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spotify::{
+        bridge::decode,
+        model::{Collection, Home, Library, Me, SearchResults},
+    };
+
+    #[test]
+    fn every_answer_has_its_type() {
+        let home: Home = decode(&Command::Home, answer(&Command::Home).unwrap()).unwrap();
+        assert!(!home.sections.is_empty());
+        let found: SearchResults =
+            decode(&Command::Home, answer(&Command::Search("radiohead".into())).unwrap()).unwrap();
+        assert!(!found.is_empty());
+        let none: SearchResults =
+            decode(&Command::Home, answer(&Command::Search("nothing at all".into())).unwrap()).unwrap();
+        assert!(none.is_empty());
+        let me: Me = decode(&Command::Me, answer(&Command::Me).unwrap()).unwrap();
+        assert_eq!(me.id, "demo");
+        let library: Library = decode(&Command::Library, answer(&Command::Library).unwrap()).unwrap();
+        assert!(library.items.len() > 1 && library.items[0].opens());
+        for c in [
+            Command::Playlist("p".into()),
+            Command::Album("a".into()),
+            Command::Artist("a".into()),
+            Command::LikedSongs,
+        ] {
+            let page: Collection = decode(&c, answer(&c).unwrap()).unwrap();
+            assert!(!page.tracks.is_empty(), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn controls_set_the_target_state() {
+        let mut p = player();
+        assert!(control(&mut p, &Command::SetLiked(true)));
+        assert!(!control(&mut p, &Command::SetLiked(true)), "idempotent");
+        assert!(control(&mut p, &Command::SetVolume(2.0)));
+        assert_eq!(p.volume, 1.0);
+        assert!(control(&mut p, &Command::Seek(1e12)));
+        assert_eq!(p.position_ms, p.duration_ms);
+        assert!(!control(&mut p, &Command::Next));
+    }
 }

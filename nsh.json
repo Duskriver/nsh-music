@@ -5,5 +5,15 @@
   "build": 1,
   "appearance": "system",
   "theme": "theme.json",
-  "rust": "."
+  "window": {
+    "titleBar": {
+      "style": "hidden",
+      "height": 40
+    }
+  },
+  "rust": ".",
+  "minRuntime": "0.4.0",
+  "updater": {
+    "github": "huacnlee/spotish"
+  }
 }

@@ -2,28 +2,115 @@
 
 Contributions are welcome. If you find a bug or have an idea, please open an issue or a pull request.
 
-Please write clean code that follows the style and organization of the existing code, and make sure it builds
-(`cargo check`) and the tests pass (`cargo test`).
-
-Please submit **one PR that does one thing** — it is easier to review and faster to merge.
-
-## Project layout
-
-- `src/spotify/` — the engine: it runs and drives Spotify's own web player in a headless browser over the DevTools
-  protocol (`chrome.rs`, `cdp.rs`, `session.rs`), and the data it returns (`model.rs`). This layer is Rust.
-- `src/store.rs` — the app's state, the one owner of what the engine reports and the view's history.
-- `src/ui/` — the app's own styled component library: theme tokens, icons, controls, motion and the ambient shader.
-- `src/components/`, `src/pages/`, `src/shell.rs` — the screens, composed from `src/ui/` and `nsh_base`.
-- `src/bridge/bridge.js` — the script installed in the web player: it reads what the player uses to talk to Spotify
-  and reports the player's state. Every selector and query name the web player exposes is read in this one file, so a
-  change to the web player is mended here.
-
-## Built on NSH
-
-Spotish is built with [NSH (Native Shell)](https://nsh.dev). Read its coding and design guides before changing the UI;
-draw with theme tokens, wrap each `nsh/base` component once in `src/ui/`, and keep the look the app's own.
+Please submit **one PR that does one thing** — it is easier to review and faster to merge. Write clean code that
+follows the style and organization of the code around it, and make sure the checks below pass.
 
 ## Respecting Spotify
 
-Spotish plays through Spotify's own web player and **never blocks or skips Spotify's ads**. Keep it that way: features
-that remove ads or circumvent Spotify's free-tier limits will not be merged. Point listeners to Spotify Premium instead.
+Spotish plays through Spotify's own web player with the listener's own account, and it **never blocks, skips, mutes,
+hides or shortens Spotify's ads**. Keep it that way: changes that remove ads or get around Spotify Free's limits (on
+demand play, skips) will not be merged. Point listeners to Spotify Premium instead. Spotish is unofficial: use
+"Spotify" only to say what Spotish works with, and do not use Spotify's logo, green or look.
+
+## Setup
+
+1. **Rust** through [rustup](https://rustup.rs), and on Linux GTK 4.14+ development packages (see NSH's
+   [installation guide](https://nsh.dev/docs/installation.md)).
+2. **The `nsh` CLI, nightly.** Spotish follows NSH's `main` branch. Install the nightly build (macOS arm64, Linux
+   x86_64; Windows: `$env:NSH_VERSION="nightly"; irm https://nsh.dev/install.ps1 | iex`):
+
+   ```sh
+   curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
+   nsh --version    # e.g. "nsh 0.4.0 (f81b965)": the commit it was built from
+   ```
+
+3. **A browser with Widevine**: Google Chrome, Chromium, Microsoft Edge or Brave. Only needed to play music, not for
+   demo mode or the tests.
+
+### How Spotish depends on NSH
+
+`Cargo.toml` takes NSH's crates from Git, from its `main` branch:
+
+```toml
+nsh-core = { git = "https://github.com/longbridge/nsh", branch = "main" }
+```
+
+`Cargo.lock` holds the commit. The `nsh` CLI generates its hosts from the same Git checkout Cargo resolved, so the app
+and its hosts share one `nsh-core`. The locked commit must be the one your CLI was built from (the hash
+`nsh --version` prints): the code the CLI generates calls that commit's API. The `nightly` tag moves with NSH's
+`main`; to follow it, reinstall the CLI, run `cargo update -p nsh-core` (it takes `main`'s latest commit, so do it
+soon after the nightly is published; `cargo update -p nsh-core --precise <hash>` takes the exact commit
+`git ls-remote https://github.com/longbridge/nsh refs/tags/nightly` prints), and run `nsh check` and `nsh test`. CI
+warns when the nightly CLI and the locked commit differ.
+
+To work against a local NSH checkout instead (for example while changing NSH itself), point the `nsh-*` lines at it
+with `path = "../nsh/crates/nsh-core"` (and so on) and use a CLI built from that checkout. Do not commit that change:
+nobody else has your checkout.
+
+## Running
+
+```sh
+nsh run                       # build the engine, bundle the TSX interface, run on this machine
+SPOTISH_DEMO=1 nsh run        # demo mode: recorded sample data, no browser, no account
+nsh run --target tui          # the terminal interface
+```
+
+- **Demo mode** (`SPOTISH_DEMO=1`) is the quickest way to work on the interface, and is what Web and mobile run.
+- **Importing an existing login.** Set `SPOTISH_PROFILE` to the profile directory of a browser you are already signed
+  in to Spotify with (for example `~/.config/chromium` or `~/.config/google-chrome`). Spotish imports that login once
+  into its own profile; close that browser first. Without it, press **Log in** and sign in in the window that opens.
+- `SPOTISH_BROWSER` picks the browser executable when Spotish does not find yours.
+
+## Checks and tests
+
+Run these before opening a PR; CI runs the same (`.github/workflows/ci.yml`):
+
+```sh
+nsh check                              # cargo check --all-targets, then tsc
+nsh build                              # describe the crate and bundle the TSX (bundler diagnostics)
+nsh test                               # cargo test, then the *.test.tsx files headless
+cargo test                             # the Rust crate alone
+node --check src/bridge/bridge.js      # the bridge parses
+node --test src/bridge/*.test.mjs      # the bridge's tests, when present
+```
+
+Tests never need a Spotify account or the network: test the engine on recorded bridge payloads
+(`src/spotify/fixtures/`), and the interface against demo data. If a test runs something that makes temporary
+directories, point `TMPDIR` outside the repository.
+
+## Project layout
+
+Rust (the engine):
+
+- `src/spotify/` — runs and drives Spotify's web player in your browser over the DevTools protocol (browser discovery
+  and launch, the CDP connection, the session), the typed models of what it returns, and demo data.
+- `src/exports.rs` — what the engine exports to TSX (`#[class]` classes and `JsObject` types). This is the only
+  door between Rust and TSX; keep it typed.
+- `src/lib.rs` — the crate root.
+
+The bridge:
+
+- `src/bridge/bridge.js` — the script installed in the web player. It reads what the player uses to talk to Spotify
+  and reports the player's state. Every selector and query name of the web player is read in this one file, so a
+  change to Spotify's web player is mended here. Its tests sit beside it as `*.test.mjs`.
+
+TSX (the interface), from `App.tsx`:
+
+- `src/backend/` — the `Backend` interface and its implementations: the engine (desktop, TUI), demo data (Web, mobile,
+  tests) and, later, a remote control for a desktop Spotish.
+- `src/state/` — the app's stores (engine, player, session, feedback), the one owner of what the backend reports.
+- `src/data/` — data loading and the cache (keyed by account, cleared on sign-out).
+- `src/components/` — the app's own components: theme-token styling, icons, controls, and shared player pieces
+  (transport, seek bar, like). Wrap each `nsh/base` component once here.
+- `src/pages/` — Home, Search, Library, collections, Now Playing, About.
+- `src/shells/` — Desktop, Phone and Terminal shells that arrange the pages.
+- `src/platform/` — platform integrations (tray, media keys, system theme).
+- `src/nav.ts` — navigation: a stack of pages that keep their scroll, with back.
+- `theme.json` — the color tokens, light and dark. Draw with tokens, never raw colors.
+
+The website (`website/`, Astro) is separate: `cd website && bun install && bun run build`.
+
+## Built on NSH
+
+Read NSH's [coding and design guides](https://nsh.dev/docs) before changing the interface, and keep the look Spotish's
+own.

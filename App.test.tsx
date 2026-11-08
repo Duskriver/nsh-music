@@ -1,12 +1,198 @@
-// The Rust root tested from TypeScript: `nsh test` runs this file in a
-// headless runner it builds with the crate, and `open(".")` starts the root
-// (`nsh.json` "root").
+// The app's flows on the demo backend (`host.params.backend: "demo"`), with
+// the steps a user takes: navigation, playback, the free tier, signing out,
+// the phone's drawer and the keyboard.
 import { expect, open, test } from "nsh/test";
 
-test("counts taps", async () => {
-  const app = await open(".");
-  expect(app.texts()).toContain("Count: 0");
-  await app.press("Tap");
-  await app.press("Tap");
-  expect(app.texts()).toContain("Count: 2");
+/** What a launch after the first one has in its storage. */
+const LAUNCHED = { "firstRun:done": "1" };
+
+function desktop(params: Record<string, string | number | boolean> = {}, storage: Record<string, string> = LAUNCHED) {
+  return open("./App.tsx", {
+    platform: "linux",
+    width: 1280,
+    height: 800,
+    storage,
+    host: { params: { backend: "demo", ...params } },
+  });
+}
+
+function phone(params: Record<string, string | number | boolean> = {}) {
+  return open("./App.tsx", {
+    platform: "web",
+    width: 390,
+    height: 844,
+    storage: LAUNCHED,
+    safeArea: { top: 47, right: 0, bottom: 34, left: 0 },
+    host: { params: { backend: "demo", ...params } },
+  });
+}
+
+test("Back, Forward and the library move through the stack", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  expect(app.enabled("role:button[Go back]")).toBe(false);
+  expect(app.enabled("role:button[Go forward]")).toBe(false);
+
+  await app.press("role:button[Morning Static]");
+  await app.waitFor("Soft starts for slow mornings.");
+  // Opening the same page again does not push it twice.
+  await app.press("role:button[Morning Static]");
+  await app.press("role:button[Late Trains]");
+  await app.waitFor("For the last ride home.");
+
+  await app.press("role:button[Go back]");
+  await app.waitFor("Soft starts for slow mornings.");
+  await app.press("role:button[Go back]");
+  await app.waitFor("Good evening, Ada");
+  expect(app.enabled("role:button[Go back]")).toBe(false);
+
+  await app.press("role:button[Go forward]");
+  await app.waitFor("Soft starts for slow mornings.");
+  await app.press("role:button[Go forward]");
+  await app.waitFor("For the last ride home.");
+  expect(app.enabled("role:button[Go forward]")).toBe(false);
+
+  // A root (Search) replaces the stack, and clears Forward. On a desktop
+  // the header's Search opens a field; the return key opens the page.
+  await app.press("role:button[Search]");
+  await app.type("label:Search Spotify", "kites");
+  await app.submit("label:Search Spotify");
+  await app.waitFor("role:button[Kites, The Quiet Fields]");
+  expect(app.enabled("role:button[Go back]")).toBe(false);
+  expect(app.enabled("role:button[Go forward]")).toBe(false);
+});
+
+test("a collection's track plays, and the player bar shows it", async () => {
+  const app = await desktop({ premium: true });
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Paper Lanterns]");
+  await app.waitFor("role:button[Slow River, The Quiet Fields]");
+  await app.press("role:button[Slow River, The Quiet Fields]");
+  await app.waitFor("id:player >> role:button[Pause]");
+  expect(app.texts()).toContain("Slow River");
+  // Premium plays the chosen track: no free-tier notice.
+  expect(app.texts()).not.toContain("Spotify Free shuffles playlists. Premium lets you pick any song.");
+
+  // The position moves on between the player's messages.
+  await app.wait(1500);
+  expect(app.texts().some((t) => t === "0:01" || t === "0:02")).toBe(true);
+
+  await app.press("id:player >> role:button[Pause]");
+  await app.waitFor("id:player >> role:button[Play]");
+});
+
+test("a free account hears that it shuffles, once a session", async () => {
+  const app = await desktop({ premium: false });
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Morning Static]");
+  await app.waitFor("role:button[First Light, The Quiet Fields]");
+  // The demo's free tier starts Morning Static at First Light: pick another
+  // song, so what plays is not what was picked, and the notice explains.
+  await app.waitFor("role:button[Slow River, The Quiet Fields]");
+  await app.press("role:button[Slow River, The Quiet Fields]");
+  const notice = "Spotify Free shuffles playlists. Premium lets you pick any song.";
+  await app.waitFor(notice);
+  expect(app.texts()).toContain("Premium");
+  // It stays visible: playing does not replace it with another message.
+  await app.wait(1000);
+  expect(app.texts()).toContain(notice);
+
+  await app.waitFor(notice, { state: "gone", timeout: 15000 });
+  await app.press("role:button[Neon Orchard]");
+  await app.waitFor("role:button[Glass Bees, Mira Vale]");
+  await app.press("role:button[Glass Bees, Mira Vale]");
+  await app.wait(500);
+  expect(app.texts()).not.toContain(notice);
+});
+
+test("signing out forgets the account's cache and goes back to Home", async () => {
+  const app = await desktop({ premium: true });
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Harbor Walk]");
+  await app.waitFor("Salt air and long coats.");
+  await app.waitUntil(() => Object.keys(app.storage()).some((k) => k.startsWith("cache:v1:demo-ada:")));
+
+  await app.press("role:button[User menu: Ada]");
+  await app.press("Log out");
+  await app.waitFor("role:button[Log in] >> nth=0");
+  await app.waitFor("Good evening, there");
+  expect(app.enabled("role:button[Go back]")).toBe(false);
+  expect(app.enabled("role:button[Go forward]")).toBe(false);
+  await app.waitUntil(() => !Object.keys(app.storage()).some((k) => k.startsWith("cache:v1:demo-ada:")));
+
+  // Another account signs in: it sees its own home, not the last one's.
+  await app.press("role:button[Log in] >> nth=0");
+  await app.waitFor("Good evening, Sam");
+  expect(app.texts()).not.toContain("Good evening, Ada");
+});
+
+test("signed out, playing asks to log in", async () => {
+  const app = await desktop({ signedIn: false });
+  await app.waitFor("role:button[Log in] >> nth=0");
+  await app.press("role:button[Neon Orchard, 2023 · Mira Vale]");
+  await app.waitFor("role:button[Orchard, Mira Vale]");
+  await app.press("role:button[Orchard, Mira Vale]");
+  await app.waitFor("Log in to Spotify to play music.");
+});
+
+test("space plays and pauses, but types in the search field", async () => {
+  const app = await desktop({ premium: true });
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Paper Lanterns]");
+  await app.waitFor("role:button[Kites, The Quiet Fields]");
+  await app.press("role:button[Kites, The Quiet Fields]");
+  await app.waitFor("id:player >> role:button[Pause]");
+
+  await app.press("role:button[Search]");
+  await app.type("label:Search Spotify", "glass bees");
+  expect(app.value("label:Search Spotify")).toBe("glass bees");
+  expect(app.shows("id:player >> role:button[Pause]")).toBe(true);
+  await app.submit("label:Search Spotify");
+  await app.waitFor("role:button[Glass Bees, Mira Vale]");
+});
+
+test("an ad shows its own title and a link to Premium; seeking is off", async () => {
+  const app = await desktop({ ad: true });
+  await app.waitFor("Fieldnote Coffee");
+  expect(app.texts()).toContain("Advertisement");
+  expect(app.shows("role:link[Get Premium]")).toBe(true);
+  expect(app.enabled("role:button[Next]")).toBe(false);
+});
+
+test("the first launch shows the disclaimer once", async () => {
+  const app = await desktop({}, {});
+  await app.waitFor("Spotish is an unofficial client and is not affiliated with Spotify.");
+  expect(app.shows("role:button[Get Spotify Premium]")).toBe(true);
+  await app.press("role:button[Start listening]");
+  await app.waitFor("Spotish is an unofficial client and is not affiliated with Spotify.", { state: "gone" });
+  expect(app.storage()["firstRun:done"]).toBe("1");
+});
+
+test("on a phone, the library drawer has the whole sidebar", async () => {
+  const app = await phone();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:tab[Library]");
+  await app.waitFor("role:button[User menu: Ada]");
+  expect(app.shows("Late Trains")).toBe(true);
+
+  await app.press("role:button[Late Trains]");
+  await app.waitFor("For the last ride home.");
+  // The drawer closed, and the page has Back.
+  expect(app.shows("role:button[User menu: Ada]")).toBe(false);
+  await app.press("role:button[Go back]");
+  await app.waitFor("Good evening, Ada");
+});
+
+test("the sidebar folds away and comes back", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  expect(app.texts()).toContain("Liked Songs");
+  await app.press("role:button[Collapse sidebar]");
+  await app.waitFor("role:button[Expand sidebar]");
+  expect(app.texts()).not.toContain("Liked Songs");
+  // The account comes up to the header, with its menu.
+  await app.press("role:button[User menu: Ada]");
+  await app.waitFor("Log out");
+  await app.press("role:button[Expand sidebar]");
+  await app.waitFor("Liked Songs");
 });

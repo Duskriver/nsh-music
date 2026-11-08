@@ -1,121 +1,34 @@
-//! The `Spotify` class exported to TSX: it owns the engine (the session with
-//! the web player) and gives TSX a view of the player's state through
-//! callbacks, data through async methods, and control through methods.
+//! The `Spotify` class exported to TSX: a handle onto the process's one
+//! engine (the session with the web player). TSX gets the player's state
+//! through listeners, data through async methods, and control through
+//! methods.
 //!
-//! One owner per piece of state (mixed.md): the player's state lives here;
-//! TSX mirrors it in signals, updated by the callbacks, and changes it only
-//! through these methods.
+//! One owner per piece of state (mixed.md): the player's state lives in the
+//! engine; TSX mirrors it in signals, updated by the listeners, and changes
+//! it only through these methods. Every rejection's message is
+//! `"E_CODE: message"` (see `ErrorCode`).
 
 use std::{cell::RefCell, rc::Rc};
 
 use nsh_core::{element::CallbackArgs, prelude::*};
-use serde_json::{Value, json};
-use tokio::sync::mpsc::UnboundedReceiver;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
-use crate::spotify::{Event, PlayerState, Session, Status, demo};
+use crate::spotify::{
+    Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Me, Player, Repeat, SearchResults, Session, Snapshot,
+    bridge::{self, Command},
+    engine,
+};
 
-/// The player's state, as TSX sees it (one object per change).
-#[derive(Debug, Clone, Default, JsObject)]
-pub struct Player {
-    /// Whether a Spotify account is signed in.
-    pub signed_in: bool,
-    /// The track's title, empty when nothing is loaded.
-    pub title: String,
-    /// The track's artists.
-    pub artist: String,
-    /// The album's name.
-    pub album: String,
-    /// The album art URL.
-    pub artwork: String,
-    /// The track's URI (`spotify:track:…`).
-    pub track_uri: String,
-    /// The path of the context playing (`/playlist/…`), for linking to it.
-    pub context_href: String,
-    /// Whether it is playing.
-    pub playing: bool,
-    /// Whether the player can play at all.
-    pub can_play: bool,
-    /// The playback position, in milliseconds.
-    pub position_ms: f64,
-    /// The track's length, in milliseconds.
-    pub duration_ms: f64,
-    /// Whether shuffle is on.
-    pub shuffle: bool,
-    /// Whether shuffle can be toggled.
-    pub shuffle_available: bool,
-    /// How it repeats: `"off"`, `"context"` or `"track"`.
-    pub repeat: String,
-    /// The volume, 0 to 1.
-    pub volume: f64,
-    /// Whether it is muted.
-    pub muted: bool,
-    /// Whether the track is saved to Liked Songs.
-    pub liked: bool,
-    /// Whether there is a next track.
-    pub can_next: bool,
-    /// Whether there is a previous track.
-    pub can_previous: bool,
-    /// Whether an ad is playing.
-    pub ad: bool,
-    /// Whether the account is Premium (free accounts hear ads).
-    pub premium: bool,
-}
-
-impl From<PlayerState> for Player {
-    fn from(p: PlayerState) -> Self {
-        Player {
-            signed_in: p.signed_in,
-            title: p.title,
-            artist: p.artist,
-            album: p.album,
-            artwork: p.artwork,
-            track_uri: p.track_uri,
-            context_href: p.context_href,
-            playing: p.playing,
-            can_play: p.can_play,
-            position_ms: p.position_ms as f64,
-            duration_ms: p.duration_ms as f64,
-            shuffle: p.shuffle,
-            shuffle_available: p.shuffle_available,
-            repeat: match p.repeat {
-                crate::spotify::Repeat::Off => "off",
-                crate::spotify::Repeat::Context => "context",
-                crate::spotify::Repeat::Track => "track",
-            }
-            .to_owned(),
-            volume: p.volume as f64,
-            muted: p.muted,
-            liked: p.liked,
-            can_next: p.can_next,
-            can_previous: p.can_previous,
-            ad: p.ad,
-            premium: p.premium,
-        }
-    }
-}
-
-/// Where the session is, as TSX sees it.
-#[derive(Debug, Clone, Default, JsObject)]
-pub struct Health {
-    /// `"starting"`, `"ready"`, `"signingIn"` or `"failed"`.
-    pub status: String,
-    /// The reason, when `status` is `"failed"`.
-    pub error: Option<String>,
-}
-
-fn health_of(status: &Status) -> Health {
-    match status {
-        Status::Starting => Health { status: "starting".into(), error: None },
-        Status::Ready => Health { status: "ready".into(), error: None },
-        Status::SigningIn => Health { status: "signingIn".into(), error: None },
-        Status::Failed(error) => Health { status: "failed".into(), error: Some(error.clone()) },
-    }
-}
-
-#[derive(Default)]
 struct Listeners<T> {
     next: u64,
     items: Vec<(u64, Callback<T>)>,
+}
+
+impl<T> Default for Listeners<T> {
+    fn default() -> Self {
+        Listeners { next: 0, items: Vec::new() }
+    }
 }
 
 impl<T: CallbackArgs + Clone + 'static> Listeners<T> {
@@ -137,17 +50,36 @@ impl<T: CallbackArgs + Clone + 'static> Listeners<T> {
 
 #[derive(Default)]
 struct Inner {
-    player: Player,
-    health: Health,
-    signed_in: Option<bool>,
+    /// What the listeners last heard.
+    last: Snapshot,
     on_player: Listeners<Player>,
     on_health: Listeners<Health>,
-    on_signed_in: Listeners<bool>,
+    on_signed_in: Listeners<Option<bool>>,
     on_auth: Listeners<()>,
-    rx: Option<UnboundedReceiver<Event>>,
 }
 
-/// The engine, exported to TSX as `new Spotify()`.
+impl Inner {
+    /// Tells the listeners what changed since `last`.
+    fn deliver(&mut self, now: Snapshot) {
+        if now.player != self.last.player {
+            self.on_player.post(now.player.clone());
+        }
+        if now.health != self.last.health {
+            self.on_health.post(now.health.clone());
+        }
+        if now.signed_in != self.last.signed_in {
+            self.on_signed_in.post(now.signed_in);
+        }
+        if now.auth != self.last.auth {
+            self.on_auth.post(());
+        }
+        self.last = now;
+    }
+}
+
+/// The Spotify engine: the web player, run headless and driven for the app.
+/// Construct it as often as you like; every instance is a handle onto the
+/// one engine of the process, which starts with the first.
 #[class]
 pub struct Spotify {
     session: Session,
@@ -156,221 +88,239 @@ pub struct Spotify {
 
 #[class]
 impl Spotify {
-    /// Starts the session with the real web player, or the recorded demo
-    /// data when `SPOTISH_DEMO` is set.
-    pub fn new() -> Self {
-        let demo = std::env::var_os("SPOTISH_DEMO").is_some_and(|v| v != "0");
-        let (session, events) = if demo { demo::session() } else { Session::start() };
-        let inner = Rc::new(RefCell::new(Inner { rx: Some(events), ..Inner::default() }));
-        inner.borrow_mut().health = Health { status: "starting".into(), error: None };
-        Spotify { session, inner }
-    }
-
-    /// Begins delivering the player's state to the listeners. Call it once,
-    /// after subscribing; it resolves when the session ends.
-    pub async fn start(this: Instance<Self>) {
-        let inner = this.with(|s| s.inner.clone());
-        let Some(mut rx) = inner.borrow_mut().rx.take() else { return };
-        while let Some(event) = rx.recv().await {
-            let mut w = inner.borrow_mut();
-            match event {
-                Event::Status(status) => {
-                    let health = health_of(&status);
-                    w.health = health.clone();
-                    w.on_health.post(health);
-                }
-                Event::Player(state) => {
-                    let player = Player::from(state);
-                    w.player = player.clone();
-                    w.on_player.post(player);
-                }
-                Event::SignedIn(now) => {
-                    w.signed_in = Some(now);
-                    w.on_signed_in.post(now);
-                }
-                Event::Auth => w.on_auth.post(()),
+    /// A handle onto the engine (starting it, the first time): the real web
+    /// player, or the recorded demo when `SPOTISH_DEMO` is set.
+    pub fn new(cx: CallCx<'_>) -> Self {
+        let engine = engine::engine();
+        let mut state = engine.subscribe();
+        let inner = Rc::new(RefCell::new(Inner { last: state.borrow_and_update().clone(), ..Inner::default() }));
+        // Delivers the engine's changes to this handle's listeners, until the
+        // handle goes.
+        let weak = Rc::downgrade(&inner);
+        cx.start(async move {
+            while state.changed().await.is_ok() {
+                let now = state.borrow_and_update().clone();
+                let Some(inner) = weak.upgrade() else { break };
+                inner.borrow_mut().deliver(now);
             }
-        }
+        });
+        Spotify { session: engine.session().clone(), inner }
     }
 
     /// The player's current state.
     #[getter]
     pub fn player(&self) -> Player {
-        self.inner.borrow().player.clone()
+        engine::engine().snapshot().player
     }
 
     /// Where the session is.
     #[getter]
     pub fn health(&self) -> Health {
-        self.inner.borrow().health.clone()
+        engine::engine().snapshot().health
     }
 
     /// Whether an account is signed in, or null until it is known.
     #[getter]
     pub fn signed_in(&self) -> Option<bool> {
-        self.inner.borrow().signed_in
+        engine::engine().snapshot().signed_in
     }
 
-    /// Calls `listener` with the player's state after every change.
+    /// Calls `listener` with the player's state now, then after every change.
     pub fn on_player(&self, #[args(player)] listener: Callback<Player>) -> Stop {
+        listener.post(self.inner.borrow().last.player.clone());
         let inner = self.inner.clone();
         let id = inner.borrow_mut().on_player.add(listener);
         Stop::new(move || inner.borrow_mut().on_player.remove(id))
     }
 
-    /// Calls `listener` when the session's status changes.
+    /// Calls `listener` with the session's health now, then when it changes.
     pub fn on_health(&self, #[args(health)] listener: Callback<Health>) -> Stop {
+        listener.post(self.inner.borrow().last.health.clone());
         let inner = self.inner.clone();
         let id = inner.borrow_mut().on_health.add(listener);
         Stop::new(move || inner.borrow_mut().on_health.remove(id))
     }
 
-    /// Calls `listener` when the signed-in account changes.
-    pub fn on_signed_in(&self, #[args(signed_in)] listener: Callback<bool>) -> Stop {
+    /// Calls `listener` with whether an account is signed in (null while
+    /// unknown) now, then when it changes.
+    pub fn on_signed_in(&self, #[args(signed_in)] listener: Callback<Option<bool>>) -> Stop {
+        listener.post(self.inner.borrow().last.signed_in);
         let inner = self.inner.clone();
         let id = inner.borrow_mut().on_signed_in.add(listener);
         Stop::new(move || inner.borrow_mut().on_signed_in.remove(id))
     }
 
     /// Calls `listener` when the player signs a new token (data that failed
-    /// before may now load).
+    /// before may now load). Not called on subscribing.
     pub fn on_auth(&self, listener: Callback<()>) -> Stop {
         let inner = self.inner.clone();
         let id = inner.borrow_mut().on_auth.add(listener);
         Stop::new(move || inner.borrow_mut().on_auth.remove(id))
     }
 
-    // --- Data (the bridge's JSON, straight through) ----------------------
+    // --- Data ----------------------------------------------------------------
 
     /// The home page.
-    pub async fn home(this: Instance<Self>) -> Result<Value, String> {
-        query(this, "home", json!([])).await
+    pub async fn home(this: Instance<Self>) -> Result<Home, String> {
+        data(this, Command::Home).await
     }
 
-    /// What a search for `term` finds.
-    pub async fn search(this: Instance<Self>, term: String) -> Result<Value, String> {
-        query(this, "search", json!([term])).await
+    /// What a search for `query` finds.
+    pub async fn search(this: Instance<Self>, query: String) -> Result<SearchResults, String> {
+        data(this, Command::Search(query)).await
     }
 
     /// A playlist by URI.
-    pub async fn playlist(this: Instance<Self>, uri: String) -> Result<Value, String> {
-        query(this, "playlist", json!([uri])).await
+    pub async fn playlist(this: Instance<Self>, uri: String) -> Result<Collection, String> {
+        data(this, Command::Playlist(uri)).await
     }
 
     /// An album by URI.
-    pub async fn album(this: Instance<Self>, uri: String) -> Result<Value, String> {
-        query(this, "album", json!([uri])).await
+    pub async fn album(this: Instance<Self>, uri: String) -> Result<Collection, String> {
+        data(this, Command::Album(uri)).await
     }
 
-    /// An artist by URI.
-    pub async fn artist(this: Instance<Self>, uri: String) -> Result<Value, String> {
-        query(this, "artist", json!([uri])).await
+    /// An artist by URI: popular tracks, and releases.
+    pub async fn artist(this: Instance<Self>, uri: String) -> Result<Collection, String> {
+        data(this, Command::Artist(uri)).await
     }
 
     /// The signed-in user's Liked Songs.
-    pub async fn liked_songs(this: Instance<Self>) -> Result<Value, String> {
-        query(this, "likedSongs", json!([])).await
+    pub async fn liked_songs(this: Instance<Self>) -> Result<Collection, String> {
+        data(this, Command::LikedSongs).await
     }
 
     /// The signed-in user's library.
-    pub async fn library(this: Instance<Self>) -> Result<Value, String> {
-        query(this, "library", json!([])).await
+    pub async fn library(this: Instance<Self>) -> Result<Library, String> {
+        data(this, Command::Library).await
     }
 
-    /// The signed-in user.
-    pub async fn me(this: Instance<Self>) -> Result<Value, String> {
-        query(this, "me", json!([])).await
+    /// The signed-in user (`id` keys per-account data).
+    pub async fn me(this: Instance<Self>) -> Result<Me, String> {
+        data(this, Command::Me).await
     }
 
-    // --- Controls --------------------------------------------------------
+    /// A cover image's extracted color (`hex` empty when unknown), for the
+    /// cover-tinted backdrops.
+    pub async fn colors(this: Instance<Self>, image_url: String) -> Result<CoverColor, String> {
+        data(this, Command::Colors(image_url)).await
+    }
+
+    // --- Controls --------------------------------------------------------------
 
     /// Plays or pauses.
     pub async fn toggle(this: Instance<Self>) -> Result<(), String> {
-        control(this, "toggle", json!([])).await
+        control(this, Command::Toggle).await
     }
+
+    /// Plays.
+    pub async fn play(this: Instance<Self>) -> Result<(), String> {
+        control(this, Command::Play).await
+    }
+
+    /// Pauses.
+    pub async fn pause(this: Instance<Self>) -> Result<(), String> {
+        control(this, Command::Pause).await
+    }
+
     /// Skips to the next track.
     pub async fn next(this: Instance<Self>) -> Result<(), String> {
-        control(this, "next", json!([])).await
+        control(this, Command::Next).await
     }
+
     /// Goes to the previous track.
     pub async fn previous(this: Instance<Self>) -> Result<(), String> {
-        control(this, "previous", json!([])).await
+        control(this, Command::Previous).await
     }
-    /// Toggles shuffle.
-    pub async fn shuffle(this: Instance<Self>) -> Result<(), String> {
-        control(this, "shuffle", json!([])).await
-    }
-    /// Cycles the repeat mode.
-    pub async fn repeat(this: Instance<Self>) -> Result<(), String> {
-        control(this, "repeat", json!([])).await
-    }
-    /// Toggles whether the track is saved to Liked Songs.
-    pub async fn like(this: Instance<Self>) -> Result<(), String> {
-        control(this, "like", json!([])).await
-    }
-    /// Toggles mute.
-    pub async fn mute(this: Instance<Self>) -> Result<(), String> {
-        control(this, "mute", json!([])).await
-    }
-    /// Seeks to `ms` milliseconds.
+
+    /// Seeks to `ms` milliseconds. While a seek is on its way, only the
+    /// latest one asked for is sent next; superseded calls resolve with it.
     pub async fn seek(this: Instance<Self>, ms: f64) -> Result<(), String> {
-        control(this, "seek", json!([ms])).await
+        control(this, Command::Seek(ms)).await
     }
-    /// Sets the volume, 0 to 1.
+
+    /// Sets the volume, 0 to 1 (merged as `seek` is).
     pub async fn set_volume(this: Instance<Self>, volume: f64) -> Result<(), String> {
-        control(this, "volume", json!([volume])).await
+        control(this, Command::SetVolume(volume)).await
     }
-    /// Plays a playlist, album, artist or Liked Songs, optionally from the
-    /// track at `index`.
-    pub async fn play_context(this: Instance<Self>, uri: String, index: Option<f64>) -> Result<(), String> {
-        control(this, "playContext", json!([uri, index])).await
+
+    /// Turns shuffle on or off.
+    pub async fn set_shuffle(this: Instance<Self>, on: bool) -> Result<(), String> {
+        control(this, Command::SetShuffle(on)).await
     }
+
+    /// Sets how it repeats.
+    pub async fn set_repeat(this: Instance<Self>, mode: Repeat) -> Result<(), String> {
+        control(this, Command::SetRepeat(mode)).await
+    }
+
+    /// Saves the track to Liked Songs, or removes it.
+    pub async fn set_liked(this: Instance<Self>, on: bool) -> Result<(), String> {
+        control(this, Command::SetLiked(on)).await
+    }
+
+    /// Mutes or unmutes.
+    pub async fn set_muted(this: Instance<Self>, on: bool) -> Result<(), String> {
+        control(this, Command::SetMuted(on)).await
+    }
+
+    /// Plays a playlist, album, artist or Liked Songs, from the track
+    /// `trackUri` when given.
+    pub async fn play_context(this: Instance<Self>, uri: String, track_uri: Option<String>) -> Result<(), String> {
+        control(this, Command::PlayContext { uri, track_uri }).await
+    }
+
     /// Plays one track (its radio follows it).
     pub async fn play_track(this: Instance<Self>, uri: String) -> Result<(), String> {
-        control(this, "playTrack", json!([uri])).await
+        control(this, Command::PlayTrack(uri)).await
     }
 
-    // --- The account -----------------------------------------------------
+    // --- The account and the engine ---------------------------------------------
 
-    /// Opens the sign-in window.
+    /// Opens the sign-in window; the player stops until it closes.
     pub fn sign_in(&self) {
         self.session.sign_in();
     }
+
     /// Closes the sign-in window without signing in.
     pub fn cancel_sign_in(&self) {
         self.session.cancel_sign_in();
     }
-    /// The user finished logging in: resume the player.
-    pub fn finish_sign_in(&self) {
-        self.session.finish_sign_in();
-    }
-    /// Signs out of Spotify.
+
+    /// Signs out of Spotify (the login is never re-imported afterwards).
     pub fn sign_out(&self) {
         self.session.sign_out();
     }
 
-    // --- Links -----------------------------------------------------------
-
-    /// Opens Spotify Premium in the system browser. Spotish never blocks ads;
-    /// Premium is how a listener removes them.
-    pub async fn open_premium(this: Instance<Self>) {
-        let _ = &this;
-        let _ = open_url("https://www.spotify.com/premium/").await;
+    /// Starts the player again now, after a failure (skips the wait before
+    /// the next attempt).
+    pub fn retry(&self) {
+        self.session.retry();
     }
-    /// Opens an external page in the system browser.
-    pub async fn open_external(this: Instance<Self>, url: String) {
-        let _ = &this;
-        let _ = open_url(url).await;
+
+    /// Replaces the bridge script (an OTA fix): used for every later page
+    /// load, and installed in the live page at once.
+    pub fn set_bridge(&self, source: String) {
+        self.session.set_bridge(source);
     }
 }
 
-/// Runs the bridge's `name` with `args` and returns its JSON.
-async fn query(this: Instance<Spotify>, name: &str, args: Value) -> Result<Value, String> {
+/// Runs `command` and returns the bridge's JSON.
+async fn ask(this: Instance<Spotify>, command: Command) -> Result<Value, EngineError> {
     let session = this.with(|s| s.session.clone());
-    session.call(name, args).await.map_err(|_| "the session ended".to_owned())?
+    session
+        .command(command)
+        .await
+        .unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "the engine dropped the call")))
+}
+
+/// A data command, decoded into its type.
+async fn data<T: DeserializeOwned>(this: Instance<Spotify>, command: Command) -> Result<T, String> {
+    let value = ask(this, command.clone()).await?;
+    bridge::decode(&command, value).map_err(String::from)
 }
 
 /// A control: the answer's value is ignored.
-async fn control(this: Instance<Spotify>, name: &str, args: Value) -> Result<(), String> {
-    query(this, name, args).await.map(|_| ())
+async fn control(this: Instance<Spotify>, command: Command) -> Result<(), String> {
+    ask(this, command).await.map(|_| ()).map_err(String::from)
 }
