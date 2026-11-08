@@ -177,23 +177,23 @@ impl Browser {
         match mode {
             Mode::Headless => {
                 command
+                    .arg("--remote-debugging-port=0")
+                    .arg("--remote-allow-origins=*")
                     .arg("--headless=new")
                     // The desktop layout, which has the player's whole bar.
                     .arg("--window-size=1280,900")
                     .arg("about:blank");
             }
-            // An ordinary browser window for signing in: no bridge, no
-            // automation flags (just `--remote-debugging-port`, which does not
-            // set `navigator.webdriver`), so Google, Apple and Facebook sign-in
-            // work. The DevTools port is used only to close it cleanly, so
-            // Chromium flushes the new session's cookies to disk.
+            // An ordinary browser window for signing in: no DevTools port and no
+            // bridge, so Google, Apple and Facebook sign-in work (a remote
+            // debugging port makes Google refuse the browser as "not secure").
+            // Closing the window is a clean Chromium quit, which flushes the new
+            // session's cookies to disk — that is what persists the login.
             Mode::SignIn => {
                 command.arg("--window-size=520,760").arg(format!("--app={SIGN_IN_URL}"));
             }
         }
         command
-            .arg("--remote-debugging-port=0")
-            .arg("--remote-allow-origins=*")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

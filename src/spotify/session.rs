@@ -336,10 +336,10 @@ fn run_player(
 }
 
 /// Runs the sign-in window: an ordinary browser window, with no automation and
-/// no bridge, so Spotify's own and third-party (Google, Apple) sign-in work as
-/// in any browser. The DevTools connection is used only to close the window
-/// cleanly, so Chromium flushes the new session's cookies to disk (a killed
-/// browser does not, which is why a login otherwise did not survive a restart).
+/// no bridge, so Spotify's own and third-party (Google, Apple, Facebook)
+/// sign-in work. The user signs in and then closes the window; a window the user
+/// closes is a clean Chromium quit, which flushes the new session's cookies to
+/// disk (a killed browser does not), so the login survives a restart.
 fn run_sign_in(
     binary: &std::path::Path,
     profile: &std::path::Path,
@@ -359,32 +359,20 @@ fn run_sign_in(
             return Some(Mode::Headless);
         }
     };
-    // Connect only to close it cleanly later; no bridge, no navigation.
-    let (cdp_events, _heard) = mpsc::channel();
-    let cdp = browser.page_url().ok().and_then(|url| Cdp::connect(&url, cdp_events).ok());
-    let finish = |browser: &mut Browser, cdp: &Option<Cdp>| {
-        // Close cleanly so the session's cookies are written to disk.
-        if let Some(cdp) = cdp {
-            let _ = cdp.call("Browser.close", json!({}), Duration::from_secs(8));
-        }
-        browser.wait_for_exit(Duration::from_secs(8));
-    };
     loop {
         match queue.recv_timeout(Duration::from_millis(150)) {
             Ok(Request::Call { reply, .. }) => {
                 let _ = reply.send(Err("signing in".into()));
             }
-            Ok(Request::FinishSignIn) | Ok(Request::CancelSignIn) => {
-                finish(&mut browser, &cdp);
-                return Some(Mode::Headless);
-            }
+            // Cancel: drop the window and go back without a new session.
+            Ok(Request::CancelSignIn) => return Some(Mode::Headless),
             Ok(_) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
         if !browser.running() {
-            // The user closed the window themselves — Chromium flushed on its
-            // own clean exit; go back to the player.
+            // The user closed the window — Chromium flushed the session on its
+            // clean exit; go back to the player, which reads it from disk.
             return Some(Mode::Headless);
         }
     }

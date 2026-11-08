@@ -36,8 +36,8 @@ export function About() {
   return (
     <If when={store.about()}>
       <View class="absolute inset-0 items-center justify-center bg-shell/85 p-4" onPress={() => store.about.set(false)}>
-        <View class="max-h-[640px] w-[440px] max-w-[440px] overflow-hidden rounded-(--radius-panel) bg-popover shadow-2xl" onPress={() => {}}>
-          <Scroll class="flex-1">
+        <View class="w-[440px] max-w-[440px] overflow-hidden rounded-(--radius-panel) bg-popover shadow-2xl" onPress={() => {}}>
+          <Scroll class="max-h-[80vh]">
             <View class="gap-5 p-6">
               {/* Header */}
               <View class="flex-row items-center justify-between">

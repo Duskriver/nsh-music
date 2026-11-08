@@ -154,12 +154,12 @@ function SigningIn() {
           <View class="text-primary"><Icon name="logIn" size={36} color="primary" /></View>
           <Text class="text-xl font-bold text-foreground">Log in to Spotify</Text>
           <Text class="text-center text-sm text-muted-foreground">
-            A Spotify window has opened. Log in there — your account, or Google, Apple or Facebook — then come back and
-            press "I'm logged in". Spotish takes over playback from the window.
+            A Spotify window has opened. Log in there — your account, or Google, Apple or Facebook. When your library
+            loads, <Text class="font-semibold text-foreground">close that window</Text> to finish; Spotish saves the
+            login and takes over playback.
           </Text>
           <View class="flex-row gap-3">
             <PillButton label="Cancel" onPress={() => store.cancelSignIn()} />
-            <PillButton label="I'm logged in" primary onPress={() => store.finishSignIn()} />
           </View>
         </View>
       </View>
