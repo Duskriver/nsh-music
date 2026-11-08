@@ -60,6 +60,25 @@ jobs:
           irm https://nsh.dev/install.ps1 | iex
           Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'nsh\bin')
 
+      # The hosts the CLI generates call the API of the commit it was built from, and the app's crate links the one
+      # Cargo.lock holds (see CONTRIBUTING.md). The nightly tag moves with NSH's main, so it can part from the lock:
+      # a release then stops (move the lock with `cargo update -p nsh-core --precise <nightly hash>` and tag again);
+      # a run by hand only warns. Checked in every job: the nightly can move between them.
+      - name: Compare the CLI with the locked NSH
+        run: |
+          # Windows checkouts may end lines with CRLF.
+          cli="$(nsh --version | tr -d '\r' | sed -n 's/.*(\([0-9a-f]*\)).*/\1/p')"
+          locked="$(tr -d '\r' < Cargo.lock | grep -A2 '^name = "nsh-core"$' | sed -n 's/^source = ".*#\([0-9a-f]*\)"$/\1/p')"
+          echo "nsh CLI: $cli, Cargo.lock: $locked"
+          [ -n "$cli" ] && [ -n "$locked" ] || { echo "::error::Could not read the CLI or the locked NSH commit."; exit 1; }
+          case "$locked" in
+            "$cli"*) ;;
+            *)
+              message="The nightly nsh CLI ($cli) is not the NSH commit Cargo.lock holds ($locked); run cargo update -p nsh-core --precise <nightly hash>."
+              if [ "$GITHUB_REF_TYPE" = tag ]; then echo "::error::$message"; exit 1; fi
+              echo "::warning::$message" ;;
+          esac
+
       - name: Package
         env:
           TARGET: ${{ matrix.target }}
