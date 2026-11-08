@@ -345,10 +345,12 @@ function MenuEntries(props: { name: string; image: string }) {
 
 /** The account at the sidebar's foot, which opens the user menu: the
  * user's picture and name (Spotish, signed out). */
-export function Account(props: { compact: boolean; placement?: "top" | "bottom" }) {
+export function Account(props: { compact: boolean; placement?: "top" | "bottom"; align?: "start" | "end" }) {
   const me = meQuery();
   // Up from the sidebar's foot; down from the header's corner.
   const side = () => props.placement ?? "top";
+  // Flush with its left edge, or (in the window's top-right corner) its right.
+  const align = () => props.align ?? "start";
   const name = () => (signedIn() === true ? me.data()?.name || "Account" : "Spotish");
   const open = signal(false);
   return (
@@ -356,13 +358,13 @@ export function Account(props: { compact: boolean; placement?: "top" | "bottom" 
       open={open()}
       onOpenChange={(e) => open.set(e.open)}
       placement={side()}
-      align="start"
+      align={align()}
       offset={4}
       popupClass={popupSurface}
       // As wide as the account row, so it opens flush with it.
-      popupStyle={{ ...menuPopupStyle(side(), "start"), width: accountMenuWidth() }}
-      popupStartingStyle={menuPopupHidden(side(), "start")}
-      popupEndingStyle={menuPopupLeaving(side(), "start")}
+      popupStyle={{ ...menuPopupStyle(side(), align()), width: accountMenuWidth() }}
+      popupStartingStyle={menuPopupHidden(side(), align())}
+      popupEndingStyle={menuPopupLeaving(side(), align())}
       trigger={
         <Button
           accessibilityLabel={`User menu: ${name()}`}

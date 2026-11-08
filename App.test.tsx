@@ -92,7 +92,8 @@ test("a free account hears that it shuffles, once a session", async () => {
   await app.press("role:button[Slow River, The Quiet Fields]");
   const notice = "Spotify Free shuffles playlists. Premium lets you pick any song.";
   await app.waitFor(notice);
-  expect(app.texts()).toContain("Premium");
+  // Premium is a crown in the header, named by its label.
+  await app.waitFor("role:button[Premium]");
   // It stays visible: playing does not replace it with another message.
   await app.wait(1000);
   expect(app.texts()).toContain(notice);

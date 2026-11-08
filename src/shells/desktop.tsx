@@ -10,6 +10,7 @@ import { PlayerBar } from "../components/player/player-bar";
 import { MainStack } from "./main";
 import { nowPlayingOpen } from "../state/overlays";
 import { TitleBar, titleBarArea } from "../components/ui/title-bar";
+import { NavControls, TrailingControls } from "../components/header";
 
 export function DesktopShell() {
   // Crossing a breakpoint, the sidebar and the player bar glide to their
@@ -17,7 +18,14 @@ export function DesktopShell() {
   animateLayoutOn(() => `${sidebarWidth()}|${barSize()}`);
   return (
     <View class="flex-1">
-      <TitleBar />
+      {/* The header's controls, after the name. */}
+      <TitleBar>
+        <View class="flex-1 flex-row items-center gap-2">
+          <NavControls />
+          <View class="flex-1" />
+          <TrailingControls />
+        </View>
+      </TitleBar>
       <View class="flex-1 flex-row gap-2 px-2 pb-2" style={{ paddingTop: titleBarArea().height > 0 ? 0 : 8 }}>
         <If when={sidebarShown()}>
           <View class="shrink-0" style={{ width: sidebarWidth() }}>
