@@ -4,7 +4,7 @@
 
 import { hasAppWindow, quitApp } from "../../platform/desktop";
 import { type AnimatedValue, createAnimatedValue, createMotion, effect, fpsEnabled, List, reduceMotion, setFpsEnabled, signal, Text, untracked, View } from "nsh";
-import { Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
+import { AlertDialog, Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
 import type { Item } from "../../backend/types";
 import { libraryQuery, meQuery } from "../../data/queries";
 import { currentRoute, type Route, switchTo } from "../../nav";
@@ -302,19 +302,45 @@ function Entry(props: { icon: IconName; label: string; external?: boolean; check
 
 const Separator = () => <MenuSeparator class={terminal ? "hidden" : "-mx-1 my-1 h-px bg-border"} />;
 
+/** Logs out once the user confirms: the account goes with the music, and
+ * coming back takes the browser's sign-in again, so a slip of the pointer
+ * must not do it. */
+async function confirmSignOut(): Promise<void> {
+  const { action } = await AlertDialog.show({
+    title: "Log out of Spotify?",
+    description: "The music stops, and you'll need to log in again to listen.",
+    actions: [
+      { id: "cancel", label: "Cancel", role: "cancel" },
+      { id: "logOut", label: "Log out", role: "destructive" },
+    ],
+    closeOnEscape: true,
+  });
+  if (action === "logOut") await signOut();
+}
+
 /** The user menu: who is signed in and on which plan, then Premium, Spotish
- * and NSH, the FPS monitor, and Log out. */
+ * and NSH, the FPS monitor, and Exit; Log out on the account's row. */
 function MenuEntries(props: { name: string; image: string }) {
   const premium = () => player().premium === true;
   return (
     <>
       <If when={signedIn() === true && !terminal}>
-        <View class="flex-row items-center gap-2.5 px-2.5 py-2">
+        <View class="flex-row items-center gap-2.5 py-2 pl-2.5 pr-1">
           <Cover src={props.image} size={32} round fallback="user" />
           <View class="min-w-0 flex-1">
             <Text class="line-clamp-1 text-sm font-semibold text-popover-foreground">{props.name}</Text>
             <Text class="text-xs text-muted-foreground">{premium() ? "Spotify Premium" : "Spotify Free"}</Text>
           </View>
+          {/* Log out belongs to the account, so it sits on the account's
+              row; an item still, for the menu's keys. It asks first. */}
+          <MenuItem
+            onSelect={() => void confirmSignOut()}
+            accessibilityLabel="Log out"
+            tooltip={<Hint label="Log out" />}
+            class="size-8 items-center justify-center rounded-(--radius) hover:bg-muted focus:bg-muted active:bg-muted"
+          >
+            <Icon name="logOut" size={16} color="muted-foreground" />
+          </MenuItem>
         </View>
         <Separator />
       </If>
@@ -328,11 +354,12 @@ function MenuEntries(props: { name: string; image: string }) {
       <Entry icon="code" label="NSH" external onSelect={() => openExternal(NSH_URL)} />
       {/* NSH's performance monitor: frame rate, frame and commit costs. */}
       <Entry icon="activity" label="FPS" checked={fpsEnabled()} onSelect={() => setFpsEnabled(!fpsEnabled())} />
-      <If when={signedIn() === true || hasAppWindow}>
+      <If when={(signedIn() === true && terminal) || hasAppWindow}>
         <Separator />
       </If>
-      <If when={signedIn() === true}>
-        <Entry icon="logOut" label="Log out" onSelect={() => void signOut()} />
+      {/* A terminal has no account row: Log out is a row of its own. */}
+      <If when={signedIn() === true && terminal}>
+        <Entry icon="logOut" label="Log out…" onSelect={() => void confirmSignOut()} />
       </If>
       {/* Ends the app (the music stops), as the tray's Exit. */}
       <If when={hasAppWindow}>

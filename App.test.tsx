@@ -113,8 +113,22 @@ test("signing out forgets the account's cache and goes back to Home", async () =
   await app.waitFor("Salt air and long coats.");
   await app.waitUntil(() => Object.keys(app.storage()).some((k) => k.startsWith("cache:v1:demo-ada:")));
 
+  // Log out asks first; cancelling keeps the account.
+  const asked: (string | null | undefined)[] = [];
+  app.onDialog((dialog) => {
+    asked.push(dialog.title);
+    return "Cancel";
+  });
   await app.press("role:button[User menu: Ada]");
-  await app.press("Log out");
+  await app.press("role:menuitem[Log out]");
+  await app.waitUntil(() => asked.length === 1);
+  expect(asked).toEqual(["Log out of Spotify?"]);
+  await app.wait(300);
+  expect(app.shows("role:button[User menu: Ada]")).toBe(true);
+
+  app.onDialog(() => "Log out");
+  await app.press("role:button[User menu: Ada]");
+  await app.press("role:menuitem[Log out]");
   await app.waitFor("role:button[Log in] >> nth=0");
   await app.waitFor("Good evening, there");
   expect(app.enabled("role:button[Go back]")).toBe(false);
@@ -193,7 +207,7 @@ test("the sidebar folds away and comes back", async () => {
   expect(app.texts()).not.toContain("Liked Songs");
   // The account comes up to the header, with its menu.
   await app.press("role:button[User menu: Ada]");
-  await app.waitFor("Log out");
+  await app.waitFor("role:menuitem[Log out]");
   await app.press("role:button[Expand sidebar]");
   await app.waitFor("Liked Songs");
 });
