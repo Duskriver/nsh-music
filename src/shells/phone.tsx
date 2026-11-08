@@ -1,7 +1,8 @@
 // The phone's shell: the pages full width, the
-// mini player, and tabs for Home, Search and the library, which opens a
-// drawer with the whole sidebar. iOS and Android get the system's tab bar
-// and header; elsewhere the app draws its own.
+// mini player, and tabs for the library (first: its drawer opens from
+// the left, with the whole sidebar), Explore (the
+// home page) and Liked Songs. iOS and Android get the
+// system's tab bar and header; elsewhere the app draws its own.
 
 import { platform, Text, View } from "nsh";
 import { Tab, Tabs } from "nsh/base";
@@ -11,22 +12,22 @@ import { MiniPlayer } from "../components/player/player-bar";
 import { focusRing } from "../components/ui/controls";
 import { Icon, type IconName } from "../components/ui/icons";
 import { AppSheet } from "../components/ui/overlays";
-import { currentRoot, HOME, nav, open, SEARCH } from "../nav";
+import { currentRoot, HOME, LIKED, nav, openRoot } from "../nav";
 import { drawerOpen, setDrawerOpen } from "../state/overlays";
 import { MainStack } from "./main";
 
-type TabId = "home" | "search" | "library";
+type TabId = "home" | "liked" | "library";
 
 const TABS: { id: TabId; label: string; icon: IconName; symbol: string }[] = [
-  { id: "home", label: "Home", icon: "home", symbol: "house" },
-  { id: "search", label: "Search", icon: "search", symbol: "magnifyingglass" },
   { id: "library", label: "Library", icon: "library", symbol: "books.vertical" },
+  { id: "home", label: "Explore", icon: "compass", symbol: "safari" },
+  { id: "liked", label: "Liked", icon: "heart", symbol: "heart" },
 ];
 
 /** The tab that shows now (tracked). */
 function selectedTab(): TabId {
   if (drawerOpen()) return "library";
-  return currentRoot().name === "search" ? "search" : "home";
+  return currentRoot() === LIKED ? "liked" : "home";
 }
 
 function choose(id: TabId) {
@@ -35,7 +36,7 @@ function choose(id: TabId) {
     return;
   }
   setDrawerOpen(false);
-  open(id === "home" ? HOME : SEARCH);
+  openRoot(id === "home" ? HOME : LIKED);
 }
 
 /** The app's tabs, where the system has no tab bar (the web). */
@@ -60,14 +61,15 @@ function AppTabs() {
 }
 
 export function PhoneShell() {
-  // Android's back: from Search (a root), back goes Home before it leaves.
+  // Android's back: from another root (Liked Songs), back goes Home before
+  // it leaves.
   if (mobile) BackHandler.on("press", () => {
     if (drawerOpen()) {
       setDrawerOpen(false);
       return true;
     }
-    if (nav.routes().length === 1 && currentRoot() === SEARCH) {
-      open(HOME);
+    if (nav.routes().length === 1 && currentRoot() !== HOME) {
+      openRoot(HOME);
       return true;
     }
     return false;

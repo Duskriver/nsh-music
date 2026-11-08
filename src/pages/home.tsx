@@ -41,8 +41,8 @@ export function HomePage() {
         class="flex-1"
       >
         {(data, instant) => {
-          // Every time Home is entered, each section's cards come in as a
-          // wave, each section a little after the one above; cards scrolled
+          // When Home opens (not when it is gone back to), each section's
+          // cards come in as a wave, each section a little after the one above; cards scrolled
           // to come in on their own.
           const wave = createListWave({ isTop: () => currentRoute().name === "home", afterReveal: !instant });
           return (

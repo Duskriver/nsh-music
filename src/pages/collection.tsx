@@ -110,9 +110,9 @@ function Tracks(props: { uri: string; data: Collection; instant: boolean }) {
   effect(() => rememberTracks(props.uri, props.data.tracks));
   const artist = () => props.data.header.kind === "artist";
   const showAlbum = () => wideTracks() && !artist();
-  // The rows wave in, top to bottom, every time this page is entered
-  // (opened, or gone back to): at once when cached, as the skeleton fades
-  // when they loaded. Rows scrolled to come in on their own.
+  // The rows wave in, top to bottom, when this page opens (not when it is
+  // gone back to): at once when cached, as the skeleton fades when they
+  // loaded. Rows scrolled to come in on their own.
   const wave = untracked(() =>
     createListWave({
       isTop: () => {

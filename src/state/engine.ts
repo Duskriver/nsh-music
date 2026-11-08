@@ -29,8 +29,11 @@ function demo(p: Record<string, unknown>): Backend {
     if (typeof p.signedIn === "boolean") options.signedIn = p.signedIn;
     if (typeof p.ad === "boolean") options.ad = p.ad;
     if (typeof p.latency === "number") options.latency = p.latency;
-    // A library as large as a real one, with covers (performance runs).
-    if (p.demo === "rich") enrich();
+    // A library as large as a real one, with covers: for performance runs,
+    // and on phones, where the demo is all there is (no engine to log in
+    // with), so it looks like music rather than placeholders.
+    const phone = platform.os === "ios" || platform.os === "android";
+    if (p.demo === "rich" || (phone && p.backend !== "demo")) enrich();
     backend = new DemoBackend(options);
     g[DEMO_KEY] = backend;
   }

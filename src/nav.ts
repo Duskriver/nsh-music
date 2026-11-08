@@ -1,5 +1,6 @@
 // The main content's navigation: one stack for every shell. Home and Search
-// are roots (choosing one replaces the stack); collections are pushed on top.
+// (and the phone's Liked Songs) are roots (choosing one replaces the stack);
+// collections are pushed on top.
 // Desktop's Back and Forward move through it; Forward re-opens what Back
 // (or the system's back: Escape, Alt+Left, the mouse's back button, Android's
 // back) took off.
@@ -14,6 +15,8 @@ export type Route = { name: "home" } | { name: "search" } | { name: "collection"
  * keeps its page. */
 export const HOME: Route = { name: "home" };
 export const SEARCH: Route = { name: "search" };
+/** Liked Songs as a root: the phone's tab. */
+export const LIKED: Route = { name: "collection", uri: "spotify:collection:tracks" };
 
 /** The stack (made once: it keeps its pages across hot updates). */
 export const nav = createNavStack<Route>([HOME]);
@@ -102,7 +105,8 @@ export function currentRoute(): Route {
   return routes[routes.length - 1];
 }
 
-/** The root the stack starts at: Home or Search (tracked). */
+/** The root the stack starts at: Home, Search or, from the phone's tab,
+ * Liked Songs (tracked). */
 export function currentRoot(): Route {
   return nav.routes()[0];
 }
@@ -112,11 +116,7 @@ export function currentRoot(): Route {
  * ahead is gone forward to; any other is pushed (Forward's motion). */
 export function open(route: Route): void {
   if (route.name === "home" || route.name === "search") {
-    const root = route.name === "home" ? HOME : SEARCH;
-    if (nav.routes().length === 1 && nav.routes()[0] === root) return;
-    intent = { kind: "clear" };
-    if (nav.routes()[0] === root) nav.popToRoot();
-    else nav.setRoutes([root]);
+    openRoot(route.name === "home" ? HOME : SEARCH);
     return;
   }
   if (same(currentRoute(), route)) return;
@@ -134,6 +134,15 @@ export function open(route: Route): void {
   intent = { kind: "clear" };
   nav.push(route);
   trimSoon();
+}
+
+/** Makes `root` (`HOME`, `SEARCH`, `LIKED`) the stack's root: back to it
+ * when it is already, else the stack replaced; nothing ahead. */
+export function openRoot(root: Route): void {
+  if (nav.routes().length === 1 && nav.routes()[0] === root) return;
+  intent = { kind: "clear" };
+  if (nav.routes()[0] === root) nav.popToRoot();
+  else nav.setRoutes([root]);
 }
 
 /** Whether Back has a page to go to (tracked). */

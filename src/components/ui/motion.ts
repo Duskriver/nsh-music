@@ -266,10 +266,10 @@ const platformTerminal = () => platform.idiom === "terminal";
 
 // ---- List waves ----
 //
-// A list's items come in as a wave every time its page is entered (opened,
-// or gone back to in the stack), and an item that comes into view later (a
+// A list's items come in as a wave when its page opens (going back to it in
+// the stack shows it as it was, with nothing coming in), and an item that comes into view later (a
 // row scrolled to, a card scrolled across, new search results) comes in on
-// its own, with only a little jitter. Each item comes in once per entry: a
+// its own, with only a little jitter. Each item comes in once: a
 // recycled cell given an item already shown, a re-render or a playback tick
 // does nothing. An item's motions are made once, in its body; an effect on
 // its key and the page's entries plays them.
@@ -283,8 +283,8 @@ const LATE_JITTER = 60;
 /** A list's entrances: one per list (a child per card row), made where the
  * list's content is made. */
 export interface ListWave {
-  /** How many times the page has been entered (tracked): 0 while it is
-   * not shown yet. */
+  /** Whether the page has been entered (tracked): 0 while it is not shown
+   * yet, then 1. Going back to it doesn't enter it again. */
   entry(): number;
   /** Asks to bring item `key` (at `index`) in; `run` gets its delay, ms,
    * after the items asked for in the same moment are put in order. False
@@ -302,21 +302,19 @@ export interface ListWave {
  * wave waits for the skeleton to half fade. */
 export function createListWave(options: { isTop: () => boolean; afterReveal?: boolean }): ListWave {
   const made = Date.now();
-  const top = untracked(options.isTop);
-  const entries = signal(top ? 1 : 0);
-  let was = top;
+  // Entered once: when it first shows. Going back to it (a pop) shows it
+  // as it was, with nothing coming in again.
+  const entries = signal(untracked(options.isTop) ? 1 : 0);
   let windowStart = made;
   effect(() => {
-    const now = options.isTop();
+    if (!options.isTop()) return;
     untracked(() => {
-      if (now && !was) {
-        windowStart = Date.now();
-        entries.set(entries() + 1);
-      }
-      was = now;
+      if (entries() > 0) return;
+      windowStart = Date.now();
+      entries.set(1);
     });
   });
-  const start = () => (options.afterReveal && untracked(entries) <= 1 && windowStart === made ? AFTER_REVEAL : WAVE.start);
+  const start = () => (options.afterReveal && windowStart === made ? AFTER_REVEAL : WAVE.start);
   const make = (offset: number, restartAt: { at: number }): ListWave => {
     const seen = new Map<string, number>();
     let pending: { index: number; turns: number; run: (delay: number) => void }[] = [];

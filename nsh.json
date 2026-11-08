@@ -3,6 +3,7 @@
   "id": "dev.huacnlee.spotish",
   "version": "0.1.0",
   "build": 1,
+  "icon": "icon.png",
   "appearance": "system",
   "theme": "theme.json",
   "window": {
