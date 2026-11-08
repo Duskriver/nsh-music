@@ -2,6 +2,13 @@
 
 **An unofficial, native client for Spotify, built with [NSH](https://nsh.dev).**
 
+![Spotish's Home: the library in a sidebar, rows of shows, and the player bar along the bottom.](website/public/screenshot.png)
+
+<p>
+  <img src="website/public/screen-artist.png" alt="An artist's page, with its top tracks." width="49%">
+  <img src="website/public/screen-now-playing.png" alt="Now Playing: the cover, the track and its controls over a dotted wave." width="49%">
+</p>
+
 Spotish is a lightweight, native desktop app that works with your Spotify account. Instead of running Spotify's web
 app in a full browser window, it runs Spotify's own web player out of sight in a browser you already have installed,
 and drives it from a fast, native interface drawn by NSH. Your Spotify account, free or Premium, does the playing, so
@@ -13,6 +20,8 @@ the catalogue, your library and Spotify's ads all work exactly as Spotify intend
 >
 > **Spotish never blocks or skips Spotify's ads.** [Spotify Premium](https://www.spotify.com/premium/) is how you
 > remove them, play any track on demand, and support the artists you listen to.
+
+**If this helps you, please [sponsor me](https://github.com/sponsors/huacnlee).**
 
 ## What is NSH?
 

@@ -25,8 +25,8 @@ const nsh = (text: string) => escape(text).replace(/\bNSH\b/g, '<a class="nsh-li
 // Windows (both check the release's checksum).
 const site = 'https://huacnlee.github.io/spotish';
 const commands = [
-  { id: 'unix', label: t.installUnix, command: `curl -fsSL ${site}/install.sh | bash`, href: `${repo}/blob/main/install.sh` },
-  { id: 'windows', label: t.installWindows, command: `irm ${site}/install.ps1 | iex`, href: `${repo}/blob/main/install.ps1` },
+  { id: 'unix', label: t.installUnix, command: `curl -fsSL ${site}/install.sh | bash`, href: `${repo}/blob/main/website/public/install.sh` },
+  { id: 'windows', label: t.installWindows, command: `irm ${site}/install.ps1 | iex`, href: `${repo}/blob/main/website/public/install.ps1` },
 ];
 const related = [
   { name: 'NSH', href: 'https://nsh.dev', description: t.relatedDescriptions.nsh },

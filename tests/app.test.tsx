@@ -7,7 +7,7 @@ import { expect, open, test } from "nsh/test";
 const LAUNCHED = { "firstRun:done": "1" };
 
 function desktop(params: Record<string, string | number | boolean> = {}, storage: Record<string, string> = LAUNCHED) {
-  return open("./App.tsx", {
+  return open("../App.tsx", {
     platform: "linux",
     width: 1280,
     height: 800,
@@ -17,7 +17,7 @@ function desktop(params: Record<string, string | number | boolean> = {}, storage
 }
 
 function phone(params: Record<string, string | number | boolean> = {}) {
-  return open("./App.tsx", {
+  return open("../App.tsx", {
     platform: "web",
     width: 390,
     height: 844,

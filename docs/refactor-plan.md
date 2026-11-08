@@ -37,7 +37,7 @@ Synthesized from four read-only reviews (Rust engine, bridge.js, TSX/state, arch
 ## P2
 
 17. `Backend` interface in TSX with `EngineBackend` (desktop/TUI), `DemoBackend` (Web, mobile, tests), `RemoteBackend` (websocket to a desktop instance on the LAN).
-18. Tests and CI: Rust contract tests on recorded bridge payloads; bridge snapshot test (opt-in Chromium); replace the stale `App.test.tsx`; `cache` and `store` tests; GitHub Action running `nsh check` and `nsh test`.
+18. Tests and CI: Rust contract tests on recorded bridge payloads; bridge snapshot test (opt-in Chromium); replace the stale `tests/app.test.tsx`; `cache` and `store` tests; GitHub Action running `nsh check` and `nsh test`.
 19. Make the repo buildable by others (`Cargo.toml` points at a local NSH worktree); fix stale `CONTRIBUTING.md`; first-run sheet with disclaimer and Premium; show ad artwork and click-through during ads.
 20. Benchmarks for README and website.
 

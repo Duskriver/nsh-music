@@ -107,8 +107,11 @@ TSX (the interface), from `App.tsx`:
 - `src/platform/` — platform integrations (tray, media keys, system theme).
 - `src/nav.ts` — navigation: a stack of pages that keep their scroll, with back.
 - `theme.json` — the color tokens, light and dark. Draw with tokens, never raw colors.
+- `tests/` — the app's flows on the demo backend (`app.test.tsx`), the opt-in benchmarks (`bench.test.tsx`), and the
+  Rust tests.
 
-The website (`website/`, Astro) is separate: `cd website && bun install && bun run build`.
+The website (`website/`, Astro) is separate: `cd website && bun install && bun run build`. It also serves the
+installers, `website/public/install.sh` and `install.ps1`.
 
 ## Built on NSH
 

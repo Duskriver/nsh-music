@@ -29,9 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: linux, os: ubuntu-24.04, asset: spotish-linux-x86_64.tar.gz, installer: install.sh }
-          - { target: macos, os: macos-15, asset: spotish-macos-arm64.zip, installer: install.sh }
-          - { target: windows, os: windows-latest, asset: spotish-windows-x86_64.zip, installer: install.ps1 }
+          - { target: linux, os: ubuntu-24.04, asset: spotish-linux-x86_64.tar.gz, installer: website/public/install.sh }
+          - { target: macos, os: macos-15, asset: spotish-macos-arm64.zip, installer: website/public/install.sh }
+          - { target: windows, os: windows-latest, asset: spotish-windows-x86_64.zip, installer: website/public/install.ps1 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
