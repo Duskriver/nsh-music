@@ -15,5 +15,10 @@
   "minRuntime": "0.4.0",
   "updater": {
     "github": "huacnlee/spotish"
+  },
+  "macos": {
+    "infoPlist": {
+      "NSAudioCaptureUsageDescription": "Spotish listens to the music it plays so its lights move with the beat. The sound never leaves this Mac."
+    }
   }
 }

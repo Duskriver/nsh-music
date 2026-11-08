@@ -7,8 +7,9 @@
 //   <Shader uniforms={() => ({ pulse: audio().beat, bass: audio().bass })} />
 //
 // The frame is zero (ZERO_FRAME) where there is nothing to meter: off Linux
-// for now, off the desktops, on the demo backend (tests), when the user asks
-// for less motion, while the window is hidden, and while the music is quiet.
+// and macOS 14.2+ for now, off the desktops, on the demo backend (tests),
+// when the user asks for less motion, while the window is hidden, and while
+// the music is quiet.
 // The meter starts with its first user and stops a few seconds after its
 // last one goes, so it costs nothing while no visual shows.
 
@@ -49,7 +50,7 @@ interface Shared {
   unavailable: boolean;
 }
 
-// Survives hot reload: one meter (and one `parec`) per process.
+// Survives hot reload: one meter (and one `parec` or tap) per process.
 const SLOT = "__spotishAudio";
 
 function shared(): Shared {
