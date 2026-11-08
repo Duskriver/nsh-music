@@ -26,10 +26,18 @@ pub use version::Version;
 /// cache.
 const IMAGE_MEMORY: usize = 32 << 20;
 
+/// The most the covers' encoded bytes keep in memory (NSH's default is 32
+/// MiB on the desktops). They are what a decode at another size reads; the
+/// disk cache has every download anyway, so a few dozen recent covers
+/// (tens of KB each) are enough, and the rest are read from disk again.
+const ENCODED_MEMORY: usize = 8 << 20;
+
 /// The crate's UI set: what `App.tsx` imports from `spotish/native`.
 #[native_module("spotish/native")]
 fn native(registry: &mut Registry) {
     nsh_core::image::budget().set_limit(IMAGE_MEMORY.min(nsh_core::image::default_budget()));
+    let loader = nsh_core::image::loader::loader();
+    loader.set_encoded_limit(ENCODED_MEMORY.min(loader.encoded_limit()));
     registry
         .class::<Spotify>()
         .class::<MediaControls>()
