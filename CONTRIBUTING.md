@@ -78,6 +78,44 @@ Tests never need a Spotify account or the network: test the engine on recorded b
 (`src/spotify/fixtures/`), and the interface against demo data. If a test runs something that makes temporary
 directories, point `TMPDIR` outside the repository.
 
+## Commits and pull requests
+
+Spotish follows [NSH's rules](https://github.com/longbridge/nsh/blob/main/CONTRIBUTING.md) for commits and pull
+requests:
+
+- **Every change goes through a pull request; nothing is pushed to `main` directly.** That includes documentation,
+  version bumps and CI or workflow fixes. Make a topic branch, push it, open a PR against `main`, and merge it once
+  CI passes.
+- **One commit, one PR: one thing.** No unrelated refactors, cleanups or formatting along the way. A change that does
+  two things is two PRs.
+- **Subjects and PR titles are `<area>: <What the change does>`.** The area is lower case and names one part, never
+  several separated by commas. For a change that spans parts, name the part it is mostly about. After the colon comes
+  an imperative sentence that starts with a capital letter, with no trailing period, about 72 characters in all. Say
+  what it does for people using Spotish, not which files changed. Never use conventional prefixes (`fix:`, `feat:`).
+
+  The areas:
+
+  | Area | What it covers |
+  | --- | --- |
+  | `engine` | The Rust engine: the browser, CDP and the session (`src/spotify/`, `src/exports.rs`) |
+  | `bridge` | The script that drives the web player (`src/bridge/`) |
+  | `audio` | The audio meter (`src/audio.rs`, `src/platform/audio.ts`) |
+  | `media` | The system's media controls and keys (`src/media.rs`, `src/platform/media.ts`) |
+  | `theme` | The system theme and the color tokens (`src/theme.rs`, `theme.json`) |
+  | A screen or component | A part of the interface, in snake case: `player`, `now_playing`, `lyrics`, `sidebar`, `header`, `home`, `search`, `collection`, `nav`, `ui` (the shared controls) |
+  | `desktop`, `phone`, `tui` | One shell (`src/shells/`) |
+  | `data` | Queries and the cache (`src/data/`) |
+  | `ci`, `release` | The workflows: checks, and packaging and publishing |
+  | `website`, `docs`, `tests` | The site, the documentation, the tests alone |
+
+  For example: `lyrics: Show the lyrics in Now Playing`, `nav: Keep the last four pages in the stack`,
+  `ci: Install GStreamer for the Linux builds`.
+- **The body explains why**, wrapped at 72 columns. A change made for speed or memory includes its before and after
+  numbers (`nsh test --trace`, or `tests/bench.test.tsx`).
+- **A PR follows the template** (`.github/pull_request_template.md`): what it changes and why, screenshots of anything
+  visible, and how it was tested, including what was not.
+- End AI-assisted commits with a `Co-Authored-By:` line naming the model.
+
 ## Project layout
 
 Rust (the engine):
