@@ -46,15 +46,24 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # For now the CLI is built from the NSH commit Cargo.lock holds, not installed from the nightly: the nightly
-      # trails NSH's main, and the release needs fixes it does not have yet. Once a nightly (or a release) carries the
-      # locked commit, go back to installing it, as CI does (https://nsh.dev/docs/installation).
-      - name: Build the NSH CLI from the locked commit
-        run: .github/scripts/nsh-from-source.sh
+      # Spotish follows NSH's main: the nightly CLI, as in CI (https://nsh.dev/docs/installation).
+      - name: Install the NSH CLI (nightly)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install the NSH CLI (nightly, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NSH_VERSION = 'nightly'
+          irm https://nsh.dev/install.ps1 | iex
+          Add-Content $env:GITHUB_PATH (Join-Path $env:LOCALAPPDATA 'nsh\bin')
 
       # The hosts the CLI generates call the API of the commit it was built from, and the app's crate links the one
-      # Cargo.lock holds (see CONTRIBUTING.md). Built from the lock, they agree; the check stays for when the CLI
-      # comes from the nightly again, which can part from the lock: a release then stops, a run by hand only warns.
+      # Cargo.lock holds (see CONTRIBUTING.md). The nightly tag moves with NSH's main, so it can part from the lock:
+      # a release then stops (move the lock with `cargo update -p nsh-core --precise <nightly hash>` and tag again);
+      # a run by hand only warns. Checked in every job: the nightly can move between them.
       - name: Compare the CLI with the locked NSH
         run: |
           # Windows checkouts may end lines with CRLF.
@@ -142,14 +151,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang and GTK 4
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-publish
-      - name: Build the NSH CLI from the locked commit
-        run: .github/scripts/nsh-from-source.sh
+      - name: Install the NSH CLI (nightly)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
           path: assets
