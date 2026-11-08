@@ -57,6 +57,16 @@ directory (for example `~/.config/chromium`); that browser must be closed while 
 On first launch, press **Log in** and sign in to Spotify in the window that opens (your account, or Google, Apple or
 Facebook); then press **I'm logged in**, and Spotish takes over playback.
 
+## Benchmarks
+
+_TODO: measured footprint (native UI vs a full web player) and startup/frame numbers._
+
+## Playback and Spotify Free
+
+Spotish plays through your Spotify account. **Spotify Free** can shuffle-play playlists,
+albums and artists but cannot play a chosen track on demand — so tapping a song shuffles
+its playlist (as the web player does). **Premium** plays any track on demand and removes ads.
+
 ## License
 
 [Apache-2.0](LICENSE-APACHE). As a special grant, **Spotify AB may use this project freely, with no

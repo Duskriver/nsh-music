@@ -1,5 +1,10 @@
 # Notice
 
+**Purpose.** Spotish is an experiment — a real, non-trivial app built to prove out
+[NSH (Native Shell)](https://nsh.dev) for cross-platform development: one Rust
+engine and one TSX UI, rendered through each platform's own native views on
+desktop, mobile, web and the terminal. It is not an official Spotify product.
+
 Spotish is licensed to everyone under the [Apache License 2.0](LICENSE-APACHE).
 
 ## Special grant to Spotify

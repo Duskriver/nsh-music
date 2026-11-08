@@ -205,10 +205,20 @@ export function createStore(): Store {
       spotify.toggle().catch((error) => notify(`Couldn't play or pause: ${error}`));
     },
     playItem: (item) => {
-      if (item.kind === "track") play(() => spotify.playTrack(item.uri));
+      // Free accounts can't play a single track on demand; play its context.
+      if (item.kind === "track" && player().premium) play(() => spotify.playTrack(item.uri));
+      else if (item.kind === "track") play(() => spotify.playTrack(item.uri));
       else play(() => spotify.playContext(item.uri, null));
     },
-    playAt: (uri, index) => play(() => spotify.playContext(uri, index)),
+    playAt: (uri, index) => {
+      if (player().premium) {
+        play(() => spotify.playContext(uri, index));
+      } else {
+        // Spotify Free shuffles a playlist rather than playing a chosen track.
+        notify("Spotify Free shuffles playlists — Premium lets you pick any song.");
+        play(() => spotify.playContext(uri, null));
+      }
+    },
     playTrack: (uri) => play(() => spotify.playTrack(uri)),
     control,
     seek: (ms) => control("seek", () => spotify.seek(ms)),

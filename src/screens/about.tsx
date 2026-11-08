@@ -7,7 +7,7 @@ import { store } from "../ui/store";
 import { PillButton } from "../ui/controls";
 import { Icon } from "../ui/icons";
 
-const REPO = "https://github.com/huacnlee/nshtify";
+const REPO = "https://github.com/huacnlee/spotish";
 const NSH = "https://nsh.dev";
 const TERMS = "https://www.spotify.com/legal/end-user-agreement/";
 const SPOTIFY = "https://www.spotify.com/";
