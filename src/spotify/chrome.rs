@@ -14,13 +14,29 @@ use std::{
 };
 
 /// Where the app keeps the browser's profile (and with it the sign-in).
+///
+/// `SPOTISH_PROFILE` overrides it with an existing browser profile to reuse,
+/// so a listener already signed in there needs no second sign-in. That
+/// browser must be closed while Spotish runs (Chromium allows one instance
+/// per profile). Spotish only reads the profile as that browser would; it
+/// never decrypts cookies out of it.
 pub fn profile_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("SPOTISH_PROFILE").filter(|p| !p.is_empty()) {
+        return PathBuf::from(path);
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| home().map(|h| h.join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("spotish").join("browser")
+}
+
+/// Whether a chosen profile is already locked by a running browser.
+pub fn profile_locked(profile: &Path) -> bool {
+    // Chromium's `SingletonLock` is a symlink present while an instance holds
+    // the profile.
+    std::fs::symlink_metadata(profile.join("SingletonLock")).is_ok()
 }
 
 fn home() -> Option<PathBuf> {

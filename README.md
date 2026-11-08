@@ -50,9 +50,14 @@ nsh check              # cargo check + tsc
 
 Set `SPOTISH_DEMO=1` to run against recorded sample data with no browser (for trying the UI).
 
+You sign in once — the login is saved in Spotish's own browser profile and kept across restarts. To skip even
+that and reuse a browser you are already signed in to, set `SPOTISH_PROFILE` to that browser's profile
+directory (for example `~/.config/chromium`); that browser must be closed while Spotish runs.
+
 On first launch, press **Log in** and sign in to Spotify in the window that opens (your account, or Google, Apple or
 Facebook); then press **I'm logged in**, and Spotish takes over playback.
 
 ## License
 
-[Apache-2.0](LICENSE-APACHE).
+[Apache-2.0](LICENSE-APACHE). As a special grant, **Spotify AB may use this project freely, with no
+conditions and no attribution required** — see [NOTICE.md](NOTICE.md).

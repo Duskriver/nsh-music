@@ -200,6 +200,24 @@ fn run_player(
     let send = |event: Event| {
         let _ = events.send(event);
     };
+    // A reused profile (SPOTISH_PROFILE) that another browser still holds can't
+    // be opened: say so plainly rather than failing to start.
+    if std::env::var_os("SPOTISH_PROFILE").is_some() && chrome::profile_locked(profile) {
+        send(Event::Status(Status::Failed(
+            "The browser profile Spotish reuses (SPOTISH_PROFILE) is open in another browser. Close that browser, then reopen Spotish.".into(),
+        )));
+        let until = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < until {
+            match queue.recv_timeout(Duration::from_millis(200)) {
+                Ok(Request::Call { reply, .. }) => {
+                    let _ = reply.send(Err("the profile is in use by another browser".into()));
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+        return Some(Mode::Headless);
+    }
     log::info!("player: starting (headless)");
     chrome::adopt_widevine(profile);
     let widevine_at_start = chrome::has_widevine(profile);
