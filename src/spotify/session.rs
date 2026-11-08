@@ -71,14 +71,14 @@ impl Session {
         let (requests, queue) = mpsc::channel();
         let (events, heard) = async_mpsc::unbounded_channel();
         std::thread::Builder::new()
-            .name("nshtify-session".into())
+            .name("spotish-session".into())
             .spawn(move || run(queue, events))
             .expect("the session thread starts");
         (Session { requests }, heard)
     }
 
     /// A session that answers from `answer` with no browser (tests, and
-    /// `NSHTIFY_DEMO=1`): ready at once, signed in.
+    /// `SPOTISH_DEMO=1`): ready at once, signed in.
     pub fn fake(
         answer: impl Fn(&str, &Value) -> Answer + Send + 'static,
         player: PlayerState,
@@ -89,7 +89,7 @@ impl Session {
         let _ = events.send(Event::SignedIn(true));
         let _ = events.send(Event::Player(player.clone()));
         std::thread::Builder::new()
-            .name("nshtify-fake-session".into())
+            .name("spotish-fake-session".into())
             .spawn(move || {
                 let mut player = player;
                 while let Ok(request) = queue.recv() {
@@ -164,7 +164,7 @@ fn fake_control(player: &mut PlayerState, name: &str, args: &Value) -> bool {
 fn run(queue: mpsc::Receiver<Request>, events: async_mpsc::UnboundedSender<Event>) {
     let Some(binary) = chrome::find_browser() else {
         let _ = events.send(Event::Status(Status::Failed(
-            "Spotish plays through Chromium or Google Chrome, and neither is installed. Install one, or set NSHTIFY_BROWSER to its path.".into(),
+            "Spotish plays through Chromium or Google Chrome, and neither is installed. Install one, or set SPOTISH_BROWSER to its path.".into(),
         )));
         // Answer calls until the app goes, so nothing waits forever.
         while let Ok(request) = queue.recv() {
@@ -261,7 +261,7 @@ fn run_player(
 
         while let Ok(CdpEvent { method, params }) = heard.try_recv() {
             match method.as_str() {
-                "Runtime.bindingCalled" if params["name"] == "nshtifyEvent" => {
+                "Runtime.bindingCalled" if params["name"] == "spotishEvent" => {
                     let payload = params["payload"].as_str().unwrap_or("{}");
                     let message: Value = serde_json::from_str(payload).unwrap_or_default();
                     match message["type"].as_str() {
@@ -279,7 +279,7 @@ fn run_player(
                         _ => {}
                     }
                 }
-                "Inspector.targetCrashed" | "nshtify.closed" => {
+                "Inspector.targetCrashed" | "spotish.closed" => {
                     log::warn!("the player's page went away ({method}); starting it again");
                     return Some(Mode::Headless);
                 }
@@ -357,7 +357,7 @@ fn prepare_player(cdp: &Cdp, browser: &Browser) -> Result<(), String> {
     let t = Duration::from_secs(10);
     cdp.call("Page.enable", json!({}), t)?;
     cdp.call("Runtime.enable", json!({}), t)?;
-    cdp.call("Runtime.addBinding", json!({ "name": "nshtifyEvent" }), t)?;
+    cdp.call("Runtime.addBinding", json!({ "name": "spotishEvent" }), t)?;
     cdp.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": BRIDGE }), t)?;
     if let Some(agent) = browser.user_agent() {
         cdp.call("Emulation.setUserAgentOverride", json!({ "userAgent": agent }), t)?;
@@ -380,7 +380,7 @@ fn has_session_cookie(cdp: &Cdp) -> bool {
 fn call(cdp: &Cdp, name: &str, args: &Value) -> Answer {
     let args = if args.is_array() { args.clone() } else { json!([args]) };
     let expression = format!(
-        "window.__nshtify ? window.__nshtify.call({}, {}) : Promise.reject(new Error('the player is still loading'))",
+        "window.__spotish ? window.__spotish.call({}, {}) : Promise.reject(new Error('the player is still loading'))",
         serde_json::to_string(name).unwrap(),
         args
     );

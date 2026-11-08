@@ -30,24 +30,25 @@ also a showcase of what NSH can do.
 - A small **bridge** (`src/bridge/bridge.js`) runs inside the web player. It reads what the player itself uses to talk
   to Spotify (the headers and persisted queries of its own requests), so the app can show the same data, and it reports
   the player's state and presses its controls.
-- The **UI** (`src/ui/`, `src/components/`, `src/pages/`) is all native NSH: a Spotify-style sidebar workspace that
+- The **UI** (`src/ui/`, `src/screens/`, `App.tsx`) is all native NSH, written in TSX over a Rust engine: a Spotify-style sidebar workspace that
   adapts from a desktop layout to a phone layout, a player bar, a full-screen Now Playing view with an ambient shader,
   and a library, search and collection pages.
 
 ## Requirements
 
-- **Chromium** or **Google Chrome** installed (set `NSHTIFY_BROWSER` to override the path).
+- **Chromium** or **Google Chrome** installed (set `SPOTISH_BROWSER` to override the path).
 - A **Spotify account** (free or Premium).
 - Linux, macOS or Windows. Playback needs the Widevine CDM, which Chrome ships and Chromium downloads on first run.
 
 ## Build and run
 
 ```sh
-cargo run              # run on this machine's native backend
-cargo build --release  # a release build
+nsh run                # run on this machine (builds the Rust engine, bundles the TSX UI)
+nsh build              # type-check and bundle
+nsh check              # cargo check + tsc
 ```
 
-Set `NSHTIFY_DEMO=1` to run against recorded sample data with no browser (for trying the UI).
+Set `SPOTISH_DEMO=1` to run against recorded sample data with no browser (for trying the UI).
 
 On first launch, press **Log in** and sign in to Spotify in the window that opens (your account, or Google, Apple or
 Facebook); then press **I'm logged in**, and Spotish takes over playback.

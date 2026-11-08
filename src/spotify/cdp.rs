@@ -52,7 +52,7 @@ impl Cdp {
             let pending = pending.clone();
             let closed = closed.clone();
             std::thread::Builder::new()
-                .name("nshtify-cdp".into())
+                .name("spotish-cdp".into())
                 .spawn(move || {
                     'io: loop {
                         loop {
@@ -82,7 +82,7 @@ impl Cdp {
                     for (_, reply) in pending.lock().unwrap().drain() {
                         let _ = reply.send(Err("the browser went away".into()));
                     }
-                    let _ = events.send(CdpEvent { method: "nshtify.closed".into(), params: Value::Null });
+                    let _ = events.send(CdpEvent { method: "spotish.closed".into(), params: Value::Null });
                 })
                 .map_err(|e| e.to_string())?;
         }

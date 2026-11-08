@@ -5,6 +5,5 @@
   "build": 1,
   "appearance": "dark",
   "theme": "theme.json",
-  "rust": ".",
-  "root": "App"
+  "rust": "."
 }

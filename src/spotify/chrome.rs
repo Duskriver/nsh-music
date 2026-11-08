@@ -20,17 +20,17 @@ pub fn profile_dir() -> PathBuf {
         .filter(|p| p.is_absolute())
         .or_else(|| home().map(|h| h.join(".local/share")))
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("nshtify").join("browser")
+    base.join("spotish").join("browser")
 }
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// The Chromium-family browser to run: `NSHTIFY_BROWSER`, else the first
+/// The Chromium-family browser to run: `SPOTISH_BROWSER`, else the first
 /// one on `PATH`.
 pub fn find_browser() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("NSHTIFY_BROWSER") {
+    if let Some(path) = std::env::var_os("SPOTISH_BROWSER") {
         return Some(PathBuf::from(path));
     }
     let names = [

@@ -1,16 +1,17 @@
 [package]
-name = "nsh-app-nshtify"
+name = "nsh-app-spotish"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [workspace]
 
+[lib]
+# The app's UI set (a library the CLI links into its generated hosts).
+
 [dependencies]
-# The nsh crates of the checkout the CLI was built from (nightly f81b965).
-nsh-core = { path = "../nsh.worktrees/nshtify-base/crates/nsh-core", features = ["svg", "loader", "shader"] }
-nsh-base = { path = "../nsh.worktrees/nshtify-base/crates/nsh-base", default-features = false }
-env_logger = "0.11"
+# NSH's core at the checkout the CLI was built from (nightly f81b965).
+nsh-core = { path = "../nsh.worktrees/nshtify-base/crates/nsh-core" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,15 +20,6 @@ tokio = { version = "1", features = ["sync"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { path = "../nsh.worktrees/nshtify-base/crates/nsh-platform-linux", default-features = false, features = ["shader"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { path = "../nsh.worktrees/nshtify-base/crates/nsh-platform-macos", default-features = false, features = ["shader"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { path = "../nsh.worktrees/nshtify-base/crates/nsh-platform-windows", default-features = false, features = ["shader"] }
 
 [dev-dependencies]
 nsh-engine = { path = "../nsh.worktrees/nshtify-base/crates/nsh-engine" }

@@ -1,4 +1,4 @@
-// Nshtify's bridge, installed in every document of the Spotify web player
+// Spotish's bridge, installed in every document of the Spotify web player
 // (CDP `Page.addScriptToEvaluateOnNewDocument`) before the player's own
 // scripts run.
 //
@@ -9,11 +9,11 @@
 // selector and field name the page offers is read in one place below, so a
 // change of the web player is mended here.
 (() => {
-  if (window.__nshtify) return;
+  if (window.__spotish) return;
 
   const post = (message) => {
     try {
-      if (typeof window.nshtifyEvent === "function") window.nshtifyEvent(JSON.stringify(message));
+      if (typeof window.spotishEvent === "function") window.spotishEvent(JSON.stringify(message));
     } catch (_) {}
   };
 
@@ -487,7 +487,7 @@
     },
   };
 
-  window.__nshtify = {
+  window.__spotish = {
     // The app calls these with Runtime.evaluate; each answers a JSON string.
     async call(name, args) {
       try {

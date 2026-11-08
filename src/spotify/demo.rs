@@ -1,5 +1,5 @@
 //! A session with no browser, answering from data recorded from the web
-//! player: what the tests run on, and `NSHTIFY_DEMO=1` shows (the look of
+//! player: what the tests run on, and `SPOTISH_DEMO=1` shows (the look of
 //! the app without an account).
 
 use serde_json::{Value, json};
