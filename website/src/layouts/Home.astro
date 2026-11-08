@@ -1,0 +1,141 @@
+---
+import '../styles/global.css';
+import { copy } from '../lib/copy';
+interface Props { language: 'en' | 'zh-CN' }
+const { language } = Astro.props;
+const t = copy[language];
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const asset = (path: string) => `${base}/${path}`;
+const repo = 'https://github.com/huacnlee/spotish';
+const sponsor = 'https://github.com/sponsors/huacnlee';
+const canonical = new URL(asset(language === 'en' ? '' : 'zh-CN/'), Astro.site);
+const related = [
+  { name: 'NSH', href: 'https://nsh.dev', description: t.relatedDescriptions.nsh },
+  { name: 'Omasend', href: 'https://github.com/huacnlee/omasend', description: t.relatedDescriptions.omasend },
+  { name: 'Noop', href: 'https://github.com/huacnlee/noop', description: t.relatedDescriptions.noop },
+];
+---
+<!doctype html>
+<html lang={language} data-theme="tokyo-night">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={t.intro} />
+    <meta name="theme-color" content="#121212" />
+    <title>Spotish — {t.eyebrow}</title>
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="en" href={new URL(asset(''), Astro.site)} />
+    <link rel="alternate" hreflang="zh-CN" href={new URL(asset('zh-CN/'), Astro.site)} />
+    <link rel="icon" type="image/svg+xml" href={asset('favicon.svg')} />
+    <meta property="og:title" content={`Spotish — ${t.eyebrow}`} />
+    <meta property="og:description" content={t.intro} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL(asset('screenshot.png'), Astro.site)} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline>
+      let mode;
+      try { mode = localStorage.getItem('spotish-mode'); } catch {}
+      document.documentElement.dataset.theme = (mode === 'light') ? 'flexoki-light' : (mode === 'dark' ? 'tokyo-night' : (matchMedia('(prefers-color-scheme: light)').matches ? 'flexoki-light' : 'tokyo-night'));
+    </script>
+    <style>
+      .hero-art{margin-top:28px;border:1px solid var(--subtle);border-radius:16px;overflow:hidden;background:var(--deep)}
+      .hero-art img{display:block;width:100%;height:auto}
+      .feature-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1px;background:var(--subtle);border:1px solid var(--subtle);border-radius:14px;overflow:hidden}
+      .feature-grid>div{background:var(--bg);padding:22px}
+      .feature-grid h3{margin:0 0 6px;font-size:16px}
+      .feature-grid p{margin:0;font-size:14px}
+      .callout{border:1px solid var(--border);border-radius:14px;padding:24px;background:var(--deep)}
+      .callout .actions{margin-top:16px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+      .btn{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:10px 20px;font-weight:600;font-size:14px;text-decoration:none}
+      .btn-primary{background:var(--brand);color:var(--brand-ink)}
+      .btn-outline{border:1px solid var(--border);color:var(--text)}
+      .btn-sponsor{background:#db61a2;color:#fff}
+      .sponsor-card{display:flex;gap:20px;align-items:center;flex-wrap:wrap;justify-content:space-between;border:1px solid var(--border);border-radius:14px;padding:24px;background:var(--deep)}
+      .hero .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}
+      .brand-dot{width:22px;height:22px;border-radius:50%;background:var(--brand);display:inline-block}
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">{t.skip}</a>
+    <header><div class="shell nav-row">
+      <a href={asset(language === 'en' ? '' : 'zh-CN/')} class="brand" aria-label="Spotish"><span class="brand-dot" aria-hidden="true"></span>Spotish</a>
+      <nav aria-label={t.nav}>
+        <a class="text-link" href={sponsor}>{t.sponsor}</a>
+        <a class="icon-control" href={repo} aria-label="GitHub" title="GitHub"><svg aria-hidden='true' fill='currentColor' viewBox='0 0 24 24' width='20' height='20'><path d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/></svg></a>
+        <a class="text-link" href={asset(language === 'en' ? 'zh-CN/' : '')}>{language === 'en' ? '中文' : 'EN'}</a>
+        <button id="theme-toggle" class="icon-control" type="button" aria-label={t.darkMode} title={t.darkMode}><svg class="moon-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="18" height="18"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+      </nav>
+    </div></header>
+    <main id="main" class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">{t.eyebrow}</p>
+          <h1 id="hero-title">{t.title}</h1>
+          <p class="intro">{t.intro}</p>
+          <div class="actions">
+            <a class="btn btn-primary" href={repo}>{t.getIt} <span aria-hidden="true">↗</span></a>
+            <a class="btn btn-sponsor" href={sponsor}>♥ {t.sponsor}</a>
+          </div>
+          <p class="note">{t.note}</p>
+        </div>
+        <figure class="hero-art">
+          <img src={asset('screenshot.png')} alt={t.screenshot} loading="eager" decoding="async" />
+        </figure>
+      </section>
+
+      <section id="how" class="section">
+        <div class="section-heading"><span class="index" aria-hidden="true">01 /</span><h2>{t.how}</h2><p>{t.howIntro}</p></div>
+        <ol class="steps">{t.steps.map(([title, body], i) => <li><span class="step-number" aria-hidden="true">0{i + 1}</span><div><h3>{title}</h3><p>{body}</p></div><span class="step-symbol" aria-hidden="true">{['↓','→','↗'][i]}</span></li>)}</ol>
+      </section>
+
+      <section class="section">
+        <div class="section-heading"><span class="index" aria-hidden="true">02 /</span><h2>{t.features}</h2><p>{t.featuresIntro}</p></div>
+        <div class="feature-grid">{t.facts.map(([title, body]) => <div><h3>{title}</h3><p>{body}</p></div>)}</div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading"><span class="index" aria-hidden="true">03 /</span><h2>{t.compliance}</h2></div>
+        <div class="callout">
+          <p>{t.complianceBody}</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="https://www.spotify.com/premium/">{t.premium} <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href="https://www.spotify.com/legal/end-user-agreement/">{t.terms} ↗</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading"><span class="index" aria-hidden="true">04 /</span><h2>{t.nsh}</h2><p>{t.nshBody}</p></div>
+        <p class="foundation"><a class="text-link" href="https://nsh.dev">nsh.dev ↗</a></p>
+      </section>
+
+      <section id="sponsor" class="section">
+        <div class="section-heading"><span class="index" aria-hidden="true">05 /</span><h2>{t.sponsorHeading}</h2></div>
+        <div class="sponsor-card">
+          <p style="margin:0;max-width:52ch">{t.sponsorBody}</p>
+          <a class="btn btn-sponsor" href={sponsor}>♥ {t.sponsorCta} <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <section class="related-projects" aria-labelledby="related-title">
+        <div class="related-heading"><h2 id="related-title">{t.related}</h2><p>{t.relatedIntro}</p></div>
+        <ul>{related.map(p => <li><a href={p.href}>{p.name} <span aria-hidden="true">↗</span></a><p>{p.description}</p></li>)}</ul>
+      </section>
+    </main>
+    <footer><div class="shell"><span>Spotish · {t.footer}</span><span>{t.built} <a class="text-link" href="https://nsh.dev">NSH</a> · <a class="text-link" href={repo}>{t.source}</a></span></div></footer>
+    <script>
+      const root = document.documentElement;
+      const toggle = document.querySelector('#theme-toggle');
+      function apply(light) {
+        root.dataset.theme = light ? 'flexoki-light' : 'tokyo-night';
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#fffcf0' : '#121212');
+      }
+      toggle?.addEventListener('click', () => {
+        const light = root.dataset.theme !== 'flexoki-light';
+        try { localStorage.setItem('spotish-mode', light ? 'light' : 'dark'); } catch {}
+        apply(light);
+      });
+    </script>
+  </body>
+</html>

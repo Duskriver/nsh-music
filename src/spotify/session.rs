@@ -261,7 +261,12 @@ fn run_player(
                     let _ = reply.send(call(&cdp, &name, &args));
                 });
             }
-            Ok(Request::SignIn) => return Some(Mode::SignIn),
+            Ok(Request::SignIn) => {
+                // Flush the player's cookies before handing off to sign-in.
+                let _ = cdp.call("Browser.close", json!({}), Duration::from_secs(8));
+                browser.wait_for_exit(Duration::from_secs(8));
+                return Some(Mode::SignIn);
+            }
             Ok(Request::SignOut) => {
                 let _ = cdp.call("Network.clearBrowserCookies", json!({}), Duration::from_secs(5));
                 let _ = cdp.call(
@@ -269,6 +274,9 @@ fn run_player(
                     json!({ "origin": "https://open.spotify.com", "storageTypes": "all" }),
                     Duration::from_secs(5),
                 );
+                // Close cleanly so the cleared cookies are written to disk.
+                let _ = cdp.call("Browser.close", json!({}), Duration::from_secs(8));
+                browser.wait_for_exit(Duration::from_secs(8));
                 send(Event::SignedIn(false));
                 return Some(Mode::Headless);
             }
@@ -329,8 +337,9 @@ fn run_player(
 
 /// Runs the sign-in window: an ordinary browser window, with no automation and
 /// no bridge, so Spotify's own and third-party (Google, Apple) sign-in work as
-/// in any browser. Returns to the player when the user finishes, cancels, or
-/// closes the window.
+/// in any browser. The DevTools connection is used only to close the window
+/// cleanly, so Chromium flushes the new session's cookies to disk (a killed
+/// browser does not, which is why a login otherwise did not survive a restart).
 fn run_sign_in(
     binary: &std::path::Path,
     profile: &std::path::Path,
@@ -350,20 +359,32 @@ fn run_sign_in(
             return Some(Mode::Headless);
         }
     };
+    // Connect only to close it cleanly later; no bridge, no navigation.
+    let (cdp_events, _heard) = mpsc::channel();
+    let cdp = browser.page_url().ok().and_then(|url| Cdp::connect(&url, cdp_events).ok());
+    let finish = |browser: &mut Browser, cdp: &Option<Cdp>| {
+        // Close cleanly so the session's cookies are written to disk.
+        if let Some(cdp) = cdp {
+            let _ = cdp.call("Browser.close", json!({}), Duration::from_secs(8));
+        }
+        browser.wait_for_exit(Duration::from_secs(8));
+    };
     loop {
         match queue.recv_timeout(Duration::from_millis(150)) {
             Ok(Request::Call { reply, .. }) => {
                 let _ = reply.send(Err("signing in".into()));
             }
-            // Done or cancelled: close the window (dropped here) and let the
-            // player start again, where it detects whether a session arrived.
-            Ok(Request::FinishSignIn) | Ok(Request::CancelSignIn) => return Some(Mode::Headless),
+            Ok(Request::FinishSignIn) | Ok(Request::CancelSignIn) => {
+                finish(&mut browser, &cdp);
+                return Some(Mode::Headless);
+            }
             Ok(_) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
         if !browser.running() {
-            // The user closed the window; treat it as finished and re-check.
+            // The user closed the window themselves — Chromium flushed on its
+            // own clean exit; go back to the player.
             return Some(Mode::Headless);
         }
     }

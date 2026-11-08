@@ -177,21 +177,26 @@ impl Browser {
         match mode {
             Mode::Headless => {
                 command
-                    .arg("--remote-debugging-port=0")
-                    .arg("--remote-allow-origins=*")
                     .arg("--headless=new")
                     // The desktop layout, which has the player's whole bar.
                     .arg("--window-size=1280,900")
                     .arg("about:blank");
             }
-            // A browser window as any other: no DevTools port and nothing
-            // installed in its pages, as sign-in providers (Google, Apple,
-            // Facebook) refuse browsers that are remotely controlled.
+            // An ordinary browser window for signing in: no bridge, no
+            // automation flags (just `--remote-debugging-port`, which does not
+            // set `navigator.webdriver`), so Google, Apple and Facebook sign-in
+            // work. The DevTools port is used only to close it cleanly, so
+            // Chromium flushes the new session's cookies to disk.
             Mode::SignIn => {
                 command.arg("--window-size=520,760").arg(format!("--app={SIGN_IN_URL}"));
             }
         }
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        command
+            .arg("--remote-debugging-port=0")
+            .arg("--remote-allow-origins=*")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         #[cfg(target_os = "linux")]
         unsafe {
             use std::os::unix::process::CommandExt;
@@ -203,9 +208,6 @@ impl Browser {
         }
         let child = command.spawn().map_err(|e| format!("{}: {e}", binary.display()))?;
         let mut browser = Browser { child, port: 0 };
-        if mode == Mode::SignIn {
-            return Ok(browser);
-        }
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if let Ok(text) = std::fs::read_to_string(&port_file)
@@ -227,6 +229,18 @@ impl Browser {
     /// Whether the browser is still running.
     pub fn running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Waits up to `timeout` for the browser to exit on its own (after a clean
+    /// `Browser.close`), so its cookie writes land before the process goes.
+    pub fn wait_for_exit(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// The WebSocket URL of its first page target.
