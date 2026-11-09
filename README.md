@@ -24,6 +24,34 @@
 
 ---
 
+## 下载与安装 (macOS)
+
+### 方式一：下载 DMG 安装包（推荐）
+
+1. 前往 [GitHub Releases](https://github.com/Duskriver/nsh-music/releases/latest) 下载最新的 **`nsh-music-macos-arm64.dmg`**（适用于 Apple Silicon M 系列芯片 Mac）。
+2. 双击打开 `.dmg` 文件，将 **nsh-music** 图标拖拽到 **Applications（应用程序）** 文件夹即可完成安装。
+
+> [!NOTE]
+> **首次打开若提示「无法验证开发者」或「已损坏」的解决办法**：
+>
+> 本项目为开源技术实验项目，未购买商业开发者数字证书，macOS Gatekeeper 安全机制可能会拦截：
+> - **方法 1（推荐）**：打开访达（Finder）中的「应用程序」，**按住 Control 键并右键点击 `nsh-music` 图标**，选择「打开」，在弹出对话框中点击「打开」即可（仅首次需要）。
+> - **方法 2**：打开 macOS「系统设置」->「隐私与安全性」，滚动到「安全性」区域，点击「仍要打开」。
+> - **方法 3**（若提示文件已损坏）：在终端中执行以下命令清除隔离属性：
+>   ```sh
+>   xattr -cr /Applications/nsh-music.app
+>   ```
+
+### 方式二：终端一键脚本安装
+
+在 macOS 终端中运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Duskriver/nsh-music/main/website/public/install.sh | bash
+```
+
+---
+
 ## 跨平台支持
 
 | 平台 | 状态 |

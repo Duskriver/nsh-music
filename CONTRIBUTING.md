@@ -56,6 +56,18 @@ cargo test                             # 仅运行 Rust 单元测试
 
 ---
 
+## 打包与发布 (macOS)
+
+制作 macOS 原生 `.dmg` 安装包与 `.zip` 压缩包：
+
+```sh
+./scripts/build-dmg.sh [输出目录，默认 dist/]
+```
+
+脚本会自动使用 `nsh package --target macos` 编译并打包应用，创建包含 `/Applications` 替身的 DMG 镜像，并生成 `sha256sums` 校验和。
+
+---
+
 ## 项目目录结构
 
 ### Rust 层（原生引擎与平台集成）

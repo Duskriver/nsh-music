@@ -29,9 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: linux, os: ubuntu-24.04, asset: nsh-music-linux-x86_64.tar.gz, installer: website/public/install.sh }
           - { target: macos, os: macos-15, asset: nsh-music-macos-arm64.zip, installer: website/public/install.sh }
-          - { target: windows, os: windows-latest, asset: nsh-music-windows-x86_64.zip, installer: website/public/install.ps1 }
+          # Linux 与 Windows 发布暂时注释（目前专注于 macOS 体验）
+          # - { target: linux, os: ubuntu-24.04, asset: nsh-music-linux-x86_64.tar.gz, installer: website/public/install.sh }
+          # - { target: windows, os: windows-latest, asset: nsh-music-windows-x86_64.zip, installer: website/public/install.ps1 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -94,7 +95,16 @@ jobs:
           case "$TARGET" in
             linux) mv "$out/nsh-music.tar.gz" "assets/$ASSET"; mv "$out"/nsh-music-*.tar.gz assets/ ;;
             windows) mv "$out/nsh-music.zip" "assets/$ASSET"; mv "$out"/nsh-music-*.zip assets/ ;;
-            macos) ditto -c -k --keepParent "$out/nsh-music.app" "assets/$ASSET"; mv "$out"/nsh-music-*.tar.gz assets/ ;;
+            macos)
+              ditto -c -k --keepParent "$out/nsh-music.app" "assets/$ASSET"
+              dmg_dir="$RUNNER_TEMP/dmg"
+              mkdir -p "$dmg_dir"
+              cp -R "$out/nsh-music.app" "$dmg_dir/"
+              ln -s /Applications "$dmg_dir/Applications"
+              hdiutil create -volname "NSH Music" -srcfolder "$dmg_dir" -ov -format UDZO "assets/nsh-music-macos-arm64.dmg"
+              rm -rf "$dmg_dir"
+              mv "$out"/nsh-music-*.tar.gz assets/
+              ;;
           esac
           ls -l assets
 
@@ -171,7 +181,13 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           jq --arg version "$version" '.version = $version' nsh.json > "$RUNNER_TEMP/nsh.json"
           mv "$RUNNER_TEMP/nsh.json" nsh.json
-          nsh update-manifest assets/nsh-music-"$version"-*.tar.gz assets/nsh-music-"$version"-*.zip --out assets
+          archives=()
+          for f in assets/nsh-music-"$version"-*.tar.gz assets/nsh-music-"$version"-*.zip; do
+            [ -f "$f" ] && archives+=("$f")
+          done
+          if [ ${#archives[@]} -gt 0 ]; then
+            nsh update-manifest "${archives[@]}" --out assets
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
