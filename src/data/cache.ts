@@ -88,6 +88,13 @@ export function hydrate(): Promise<void> {
         try {
           const parsed = raw ? (JSON.parse(raw) as { savedAt?: unknown; v?: unknown }) : null;
           if (!parsed || typeof parsed.savedAt !== "number" || parsed.v === undefined) throw new Error("bad entry");
+          if (
+            k.endsWith(":library") &&
+            Array.isArray((parsed.v as { items?: unknown[] })?.items) &&
+            (parsed.v as { items: unknown[] }).items.length === 0
+          ) {
+            throw new Error("empty library entry");
+          }
           // `v`'s JSON is the stored text after the head (as `stored` writes
           // it): taken as it is, not serialized again (a large playlist
           // costs QuickJS a stringify per entry at every launch).

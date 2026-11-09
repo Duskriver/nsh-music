@@ -142,7 +142,14 @@ impl NetEaseClient {
 
     /// The signed-in user's profile, if available.
     pub fn profile(&self) -> Option<NetEaseProfile> {
-        self.profile.lock().unwrap().clone()
+        let cached = self.profile.lock().unwrap().clone();
+        if cached.is_some() {
+            return cached;
+        }
+        if self.is_signed_in() {
+            return self.refresh_profile().ok().flatten();
+        }
+        None
     }
 
     /// Clears the login session and removes the stored session file.
@@ -399,7 +406,9 @@ impl NetEaseClient {
 
     /// Refreshes the user profile from `/api/nuser/account/get`.
     pub fn refresh_profile(&self) -> Result<Option<NetEaseProfile>, EngineError> {
-        let res = self.request("/api/nuser/account/get", &HashMap::new(), true)?;
+        let res = self
+            .request("/api/nuser/account/get", &HashMap::new(), false)
+            .or_else(|_| self.request("/api/nuser/account/get", &HashMap::new(), true))?;
         if let Some(profile_obj) = res.get("profile").and_then(|v| v.as_object()) {
             let id = profile_obj.get("userId").map(|v| v.to_string()).unwrap_or_default();
             let name = profile_obj
@@ -981,55 +990,55 @@ impl NetEaseClient {
 
     /// Fetches the user's library playlists.
     pub fn library(&self) -> Result<Library, EngineError> {
-        let mut items = Vec::new();
+        let profile = self
+            .profile()
+            .ok_or_else(|| EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"))?;
 
-        if let Some(profile) = self.profile() {
+        let mut items = vec![
             // 1. Liked Songs
-            items.push(Item {
+            Item {
                 uri: "spotify:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: "心动精选".to_string(),
                 image: "https://p1.music.126.net/vC_Hn86qfS-L_eS1y9k81g==/109951167878895057.jpg?param=300y300".to_string(),
-            });
-
+            },
             // 2. Daily Recommend
-            items.push(Item {
+            Item {
                 uri: "spotify:playlist:daily".to_string(),
                 kind: "playlist".to_string(),
                 name: "每日推荐".to_string(),
                 subtitle: "每天更新".to_string(),
                 image: "https://p1.music.126.net/19b5c3bfd5cb8d2db82c5f1566a7b3db/109951163351984240.jpg?param=300y300".to_string(),
-            });
+            },
+        ];
 
-            // 3. User's playlists
-            let mut params = HashMap::new();
-            params.insert("uid", json!(profile.id));
-            params.insert("limit", json!(100));
-            if let Ok(res) = self.request("/api/user/playlist", &params, false) {
-                if let Some(arr) = res.get("playlist").and_then(|v| v.as_array()) {
-                    for p in arr {
-                        // Skip the first special "I like" playlist if present
-                        if p.get("specialType").and_then(|v| v.as_i64()) == Some(5) {
-                            continue;
-                        }
-                        if let Some(id) = p.get("id").map(|v| v.to_string()) {
-                            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let count = p.get("trackCount").and_then(|v| v.as_i64()).unwrap_or(0);
-                            let owner = p
-                                .get("creator")
-                                .and_then(|c| c.get("nickname").and_then(|v| v.as_str()))
-                                .unwrap_or("");
-                            let image = artwork_url(p.get("coverImgUrl").and_then(|v| v.as_str()));
-                            items.push(Item {
-                                uri: format!("spotify:playlist:{id}"),
-                                kind: "playlist".to_string(),
-                                name,
-                                subtitle: format!("{count} 首 · by {owner}"),
-                                image,
-                            });
-                        }
-                    }
+        // 3. User's playlists
+        let mut params = HashMap::new();
+        params.insert("uid", json!(profile.id));
+        params.insert("limit", json!(100));
+        let res = self.request("/api/user/playlist", &params, false)?;
+        if let Some(arr) = res.get("playlist").and_then(|v| v.as_array()) {
+            for p in arr {
+                // Skip the first special "I like" playlist if present
+                if p.get("specialType").and_then(|v| v.as_i64()) == Some(5) {
+                    continue;
+                }
+                if let Some(id) = p.get("id").map(|v| v.to_string()) {
+                    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let count = p.get("trackCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let owner = p
+                        .get("creator")
+                        .and_then(|c| c.get("nickname").and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    let image = artwork_url(p.get("coverImgUrl").and_then(|v| v.as_str()));
+                    items.push(Item {
+                        uri: format!("spotify:playlist:{id}"),
+                        kind: "playlist".to_string(),
+                        name,
+                        subtitle: format!("{count} 首 · by {owner}"),
+                        image,
+                    });
                 }
             }
         }

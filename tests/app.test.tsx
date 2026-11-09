@@ -90,7 +90,7 @@ test("a collection's track plays, and the player bar shows it", async () => {
   await app.waitFor("id:player >> role:button[Pause]");
   expect(app.texts()).toContain("Slow River");
   // Premium plays the chosen track: no free-tier notice.
-  expect(app.texts()).not.toContain("Spotify Free shuffles playlists. Premium lets you pick any song.");
+  expect(app.texts()).not.toContain("当前账号播放受限，开通黑胶 VIP 可畅听所有歌曲");
 
   // The position moves on between the player's messages.
   await app.wait(1500);
@@ -109,7 +109,7 @@ test("a free account hears that it shuffles, once a session", async () => {
   // song, so what plays is not what was picked, and the notice explains.
   await app.waitFor("role:button[Slow River, The Quiet Fields]");
   await app.press("role:button[Slow River, The Quiet Fields]");
-  const notice = "Spotify Free shuffles playlists. Premium lets you pick any song.";
+  const notice = "当前账号播放受限，开通黑胶 VIP 可畅听所有歌曲";
   await app.waitFor(notice);
   // Premium is a crown in the header, named by its label.
   await app.waitFor("role:button[Premium]");
@@ -166,7 +166,7 @@ test("signed out, playing asks to log in", async () => {
   await app.press("role:button[Neon Orchard, 2023 · Mira Vale]");
   await app.waitFor("role:button[Orchard, Mira Vale]");
   await app.press("role:button[Orchard, Mira Vale]");
-  await app.waitFor("Log in to Spotify to play music.");
+  await app.waitFor("请扫码登录网易云音乐以播放歌曲");
 });
 
 test("space plays and pauses, but types in the search field", async () => {
