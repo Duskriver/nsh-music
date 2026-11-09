@@ -1,7 +1,4 @@
-//! The `Spotify` class exported to TSX: a handle onto the process's one
-//! engine (the session with the web player). TSX gets the player's state
-//! through listeners, data through async methods, and control through
-//! methods.
+//! The NetEase Cloud Music engine exported to TSX as `MusicEngine`.
 //!
 //! One owner per piece of state (mixed.md): the player's state lives in the
 //! engine; TSX mirrors it in signals, updated by the listeners, and changes
@@ -14,9 +11,9 @@ use nsh_core::{element::CallbackArgs, prelude::*};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::spotify::{
+use crate::music::{
     Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, Player, Repeat, SearchResults, Session, Snapshot,
-    bridge::{self, Command},
+    command::{self, Command},
     engine,
 };
 
@@ -77,19 +74,18 @@ impl Inner {
     }
 }
 
-/// The Spotify engine: the web player, run headless and driven for the app.
+/// The native NetEase Cloud Music engine.
 /// Construct it as often as you like; every instance is a handle onto the
 /// one engine of the process, which starts with the first.
 #[class]
-pub struct Spotify {
+pub struct MusicEngine {
     session: Session,
     inner: Rc<RefCell<Inner>>,
 }
 
 #[class]
-impl Spotify {
-    /// A handle onto the engine (starting it, the first time): the real web
-    /// player, or the recorded demo when `SPOTISH_DEMO` is set.
+impl MusicEngine {
+    /// A handle onto the engine, starting it on first use. It uses offline data when `NSH_MUSIC_DEMO` is set.
     pub fn new(cx: CallCx<'_>) -> Self {
         let engine = engine::engine();
         let mut state = engine.subscribe();
@@ -104,7 +100,7 @@ impl Spotify {
                 inner.borrow_mut().deliver(now);
             }
         });
-        Spotify { session: engine.session().clone(), inner }
+        MusicEngine { session: engine.session().clone(), inner }
     }
 
     /// The player's current state.
@@ -150,7 +146,7 @@ impl Spotify {
         Stop::new(move || inner.borrow_mut().on_signed_in.remove(id))
     }
 
-    /// Calls `listener` when the player signs a new token (data that failed
+    /// Calls `listener` when authentication changes (data that failed
     /// before may now load). Not called on subscribing.
     pub fn on_auth(&self, listener: Callback<()>) -> Stop {
         let inner = self.inner.clone();
@@ -206,7 +202,7 @@ impl Spotify {
         data(this, Command::Colors(image_url)).await
     }
 
-    /// A track's lyrics by URI (no lines when Spotify has none).
+    /// A track's lyrics by URI (no lines when lyrics are unavailable).
     pub async fn lyrics(this: Instance<Self>, track_uri: String) -> Result<Lyrics, String> {
         data(this, Command::Lyrics(track_uri)).await
     }
@@ -275,43 +271,36 @@ impl Spotify {
         control(this, Command::PlayContext { uri, track_uri }).await
     }
 
-    /// Plays one track (its radio follows it).
+    /// Plays one track.
     pub async fn play_track(this: Instance<Self>, uri: String) -> Result<(), String> {
         control(this, Command::PlayTrack(uri)).await
     }
 
     // --- The account and the engine ---------------------------------------------
 
-    /// Opens the sign-in window; the player stops until it closes.
+    /// Starts QR sign-in.
     pub fn sign_in(&self) {
         self.session.sign_in();
     }
 
-    /// Closes the sign-in window without signing in.
+    /// Cancels QR sign-in.
     pub fn cancel_sign_in(&self) {
         self.session.cancel_sign_in();
     }
 
-    /// Signs out of Spotify (the login is never re-imported afterwards).
+    /// Signs out of NetEase Cloud Music.
     pub fn sign_out(&self) {
         self.session.sign_out();
     }
 
-    /// Starts the player again now, after a failure (skips the wait before
-    /// the next attempt).
+    /// Resets the session after a failure.
     pub fn retry(&self) {
         self.session.retry();
     }
-
-    /// Replaces the bridge script (an OTA fix): used for every later page
-    /// load, and installed in the live page at once.
-    pub fn set_bridge(&self, source: String) {
-        self.session.set_bridge(source);
-    }
 }
 
-/// Runs `command` and returns the bridge's JSON.
-async fn ask(this: Instance<Spotify>, command: Command) -> Result<Value, EngineError> {
+/// Runs `command` and returns its JSON response.
+async fn ask(this: Instance<MusicEngine>, command: Command) -> Result<Value, EngineError> {
     let session = this.with(|s| s.session.clone());
     session
         .command(command)
@@ -320,12 +309,12 @@ async fn ask(this: Instance<Spotify>, command: Command) -> Result<Value, EngineE
 }
 
 /// A data command, decoded into its type.
-async fn data<T: DeserializeOwned>(this: Instance<Spotify>, command: Command) -> Result<T, String> {
+async fn data<T: DeserializeOwned>(this: Instance<MusicEngine>, command: Command) -> Result<T, String> {
     let value = ask(this, command.clone()).await?;
-    bridge::decode(&command, value).map_err(String::from)
+    command::decode(&command, value).map_err(String::from)
 }
 
 /// A control: the answer's value is ignored.
-async fn control(this: Instance<Spotify>, command: Command) -> Result<(), String> {
+async fn control(this: Instance<MusicEngine>, command: Command) -> Result<(), String> {
     ask(this, command).await.map(|_| ()).map_err(String::from)
 }

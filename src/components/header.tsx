@@ -8,8 +8,6 @@ import { back, canBack, canForward, currentRoute, forward, open, SEARCH } from "
 import { DISTANCE, DURATION, EASING } from "./ui/tokens";
 import { query } from "../state/search";
 import { Icon } from "./ui/icons";
-import { openPremium } from "../state/links";
-import { player } from "../state/player";
 import { signedIn, signIn } from "../state/session";
 import { layout, sidebarShown } from "./layout";
 import { Account } from "./library/sidebar";
@@ -18,15 +16,10 @@ import { sidebarCollapsed, toggleSidebar } from "../state/sidebar";
 import { ActionButton, IconButton, terminal } from "./ui/controls";
 import { controlsInTitleBar } from "./ui/title-bar";
 
-/** Log in while signed out; Premium for a free account; nothing
- * while the session is not known yet. */
+/** Shows Log in once the session reports that it is signed out. */
 export function AccountAction() {
   return (
     <View class="flex-row items-center gap-2">
-      <If when={signedIn() === true && player().premium === false}>
-        {/* An icon at every width, beside the header's other icons. */}
-        <IconButton name="crown" label="Premium" hint onPress={openPremium} />
-      </If>
       <If when={signedIn() === false}>
         <ActionButton label="Log in" variant="primary" onPress={signIn} />
       </If>
@@ -89,7 +82,7 @@ function SearchBox(props: { onSearch: boolean; onDone: () => void }) {
           if (key === "Escape" && !props.onSearch) props.onDone();
         }}
         placeholder="What do you want to play?"
-        accessibilityLabel="Search Spotify"
+        accessibilityLabel="Search music"
         returnKeyType="search"
         submitBehavior="submit"
         autoFocus

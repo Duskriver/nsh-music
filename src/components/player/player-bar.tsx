@@ -120,7 +120,7 @@ export function MiniPlayer() {
           <Cover src={player().artwork} size={40} />
           <View class="min-w-0 flex-1 gap-0.5">
             <Text class="line-clamp-1 text-sm font-semibold text-foreground">{player().title}</Text>
-            <Text class="line-clamp-1 text-xs text-muted-foreground">{player().ad ? "Advertisement" : player().artist}</Text>
+            <Text class="line-clamp-1 text-xs text-muted-foreground">{player().artist}</Text>
           </View>
         </Button>
         <PlayButton playing={player().playing} size={36} disabled={!ready()} onPress={toggle} />

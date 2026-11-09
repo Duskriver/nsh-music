@@ -5,14 +5,14 @@
 import { Image, Scroll, Text, View } from "nsh";
 import { ActionButton, IconButton, terminal, TextLink } from "../components/ui/controls";
 import { AppDialog, AppSheet } from "../components/ui/overlays";
-import { NSH_URL, openExternal, openPremium, REPO_URL, SPOTIFY_URL, TERMS_URL } from "../state/links";
+import { NSH_URL, openExternal, REPO_URL } from "../state/links";
 import { aboutOpen, finishFirstRun, firstRunOpen, setAboutOpen } from "../state/overlays";
 import { cancelSignIn, health, signedIn, signIn } from "../state/session";
 import { Logo } from "../ui/logo";
 
-const DISCLAIMER = "Spotish is an unofficial client and is not affiliated with Spotify.";
+const DISCLAIMER = "nsh-music is an unofficial client for NetEase Cloud Music.";
 
-/** About Spotish: the disclaimer first, Premium, then NSH. */
+/** Project information and links. */
 export function AboutDialog() {
   return (
     <AppDialog open={aboutOpen()} onOpenChange={setAboutOpen} testID="about">
@@ -26,29 +26,16 @@ export function AboutDialog() {
           </If>
           <View selectable={!terminal}>
             <Text role="header" class="text-xl font-extrabold text-foreground">
-              Spotish
+              nsh-music
             </Text>
-            <Text class="text-xs text-muted-foreground">A native player for Spotify</Text>
+            <Text class="text-xs text-muted-foreground">A native NetEase Cloud Music player</Text>
           </View>
         </View>
         <View class="gap-2" selectable={!terminal}>
           <Text class="text-sm font-bold text-foreground">{DISCLAIMER}</Text>
           <Text class="text-sm text-muted-foreground">
-            It plays through Spotify's own web player, so a Spotify account is needed and Spotify's terms apply. Spotify, its
-            logo and all music, artwork and trademarks belong to Spotify and the rights holders.
+            Music, lyrics and artwork belong to their respective rights holders.
           </Text>
-          <View class="flex-row flex-wrap gap-x-4 gap-y-1">
-            <TextLink label="Spotify Terms" onPress={() => openExternal(TERMS_URL)} />
-            <TextLink label="Spotify" onPress={() => openExternal(SPOTIFY_URL)} />
-          </View>
-        </View>
-        <View class={terminal ? "gap-1" : "gap-2 rounded-(--radius-card) border border-border p-4"}>
-          <Text class="text-sm text-muted-foreground">
-            Spotish never blocks Spotify's ads. Premium removes them, plays any track on demand, and supports artists.
-          </Text>
-          <View class="flex-row pt-1">
-            <ActionButton label="Get Spotify Premium" variant="primary" onPress={openPremium} />
-          </View>
         </View>
         <View class="flex-row flex-wrap gap-x-4 gap-y-1">
           <TextLink label="Built with NSH" onPress={() => openExternal(NSH_URL)} />
@@ -84,13 +71,16 @@ export function SigningInDialog() {
         <Text class="text-center text-sm text-muted-foreground">
           {h().prompt || "请使用网易云音乐手机 App 扫码并在手机上确认登录"}
         </Text>
+        <If when={h().qrImage === ""}>
+          <ActionButton label="重新扫码" variant="primary" onPress={signIn} />
+        </If>
         <ActionButton label="Cancel" onPress={cancelSignIn} />
       </View>
     </AppDialog>
   );
 }
 
-/** Shown once, on the first launch: what Spotish is, and how to start. */
+/** Shown once, on the first launch: what nsh-music is, and how to start. */
 export function FirstRunSheet() {
   return (
     <AppSheet
@@ -107,7 +97,7 @@ export function FirstRunSheet() {
             <Logo size={44} />
           </If>
           <Text role="header" class="text-xl font-extrabold text-foreground">
-            Welcome to Spotish
+            Welcome to nsh-music
           </Text>
         </View>
         <Text class="text-sm text-foreground">{DISCLAIMER}</Text>
@@ -122,7 +112,6 @@ export function FirstRunSheet() {
               }}
             />
           </If>
-          <ActionButton label="Get Spotify Premium" onPress={openPremium} />
           <ActionButton label={signedIn() === true ? "Start listening" : "Not now"} onPress={finishFirstRun} />
         </View>
         <TextLink label="Built with NSH" onPress={() => openExternal(NSH_URL)} />

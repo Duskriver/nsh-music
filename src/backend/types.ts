@@ -33,16 +33,16 @@ export interface Health {
 
 /** The player's state: one object per change. */
 export interface PlayerState {
-  /** The track's (or the ad's) title; empty when nothing is loaded. */
+  /** The track's title; empty when nothing is loaded. */
   title: string;
   artist: string;
   album: string;
-  /** The track's (or the ad's) artwork URL. */
+  /** The track's artwork URL. */
   artwork: string;
-  /** `spotify:track:…`. */
+  /** `netease:track:…`. */
   trackUri: string;
-  /** What plays: `spotify:playlist:…`, `spotify:album:…`,
-   * `spotify:collection:tracks`; empty when unknown. */
+  /** What plays: `netease:playlist:…`, `netease:album:…`,
+   * `netease:collection:tracks`; empty when unknown. */
   contextUri: string;
   playing: boolean;
   /** The position when the state was sampled. */
@@ -60,10 +60,6 @@ export interface PlayerState {
   liked: boolean;
   canNext: boolean;
   canPrevious: boolean;
-  /** An ad is playing: `title` and `artwork` are the ad's. */
-  ad: boolean;
-  /** Whether the account is Premium; null while unknown or signed out. */
-  premium: boolean | null;
 }
 
 /** The state before the backend reports any. */
@@ -86,8 +82,6 @@ export const EMPTY_PLAYER: PlayerState = {
   liked: false,
   canNext: false,
   canPrevious: false,
-  ad: false,
-  premium: null,
 };
 
 // ---- Data ----------------------------------------------------------------
@@ -248,7 +242,7 @@ export interface Backend {
   setMuted(on: boolean): Promise<void>;
   /** Plays a collection, from `trackUri` when given. */
   playContext(uri: string, trackUri: string | null): Promise<void>;
-  /** Plays one track (its radio follows). */
+  /** Plays one track. */
   playTrack(uri: string): Promise<void>;
 
   // The account and the session.
@@ -257,8 +251,6 @@ export interface Backend {
   signOut(): Promise<void>;
   /** Starts the session again after it failed. */
   retry(): Promise<void>;
-  /** Hands the engine the bridge script shipped with the TSX bundle. */
-  setBridge(source: string): void;
 
   /** Stops listening to the engine (a hot update replaces this object). */
   dispose(): void;
@@ -280,7 +272,7 @@ export function backendError(code: string, message: string): Error {
 
 // ---- Helpers on the models -----------------------------------------------
 
-/** What a `spotify:<kind>:<id>` URI names. */
+/** What a `netease:<kind>:<id>` URI names. */
 export function kindOf(uri: string): string {
   return uri.split(":")[1] ?? "";
 }

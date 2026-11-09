@@ -4,7 +4,7 @@
 // list and scroll position.
 
 import { effect, List, Text, untracked, View } from "nsh";
-import type { Collection } from "../backend/types";
+import { type Collection, kindOf } from "../backend/types";
 import { AppPage } from "../components/page";
 import { layout, pageEnd, wideTracks } from "../components/layout";
 import { CardGrid } from "../components/library/cards";
@@ -25,7 +25,7 @@ import {
 } from "../components/ui/feedback";
 import { collectionQuery } from "../data/queries";
 import { isPlayingContext, playFrom, rememberTracks, toggleCollection } from "../state/player";
-import { ready } from "../state/session";
+import { ready, signedIn, signIn } from "../state/session";
 
 const KIND_LABEL: Record<string, string> = {
   album: "Album",
@@ -165,17 +165,19 @@ function Tracks(props: { uri: string; data: Collection; instant: boolean }) {
 }
 
 export function CollectionPage(props: { uri: string }) {
-  const query = collectionQuery(() => props.uri);
+  const needsLogin = () =>
+    signedIn() === false && (kindOf(props.uri) === "collection" || props.uri === "netease:playlist:daily");
+  const query = collectionQuery(() => (needsLogin() ? null : props.uri));
   const title = () => query.data()?.header.name ?? "";
-  const liked = () => query.data()?.header.kind === "collection";
   const body = () => (
     <Reveal
       data={query.data()}
       placeholder={
-        <If when={query.error()} else={<CollectionSkeleton phone={layout() !== "desktop"} />}>
+        <If when={needsLogin() || query.error()} else={<CollectionSkeleton phone={layout() !== "desktop"} />}>
           <ErrorState
-            message="This page didn't load."
-            onRetry={query.refetch}
+            message={needsLogin() ? "Log in to view this page." : "This page didn't load."}
+            actionLabel={needsLogin() ? "Log in" : "Retry"}
+            onRetry={() => (needsLogin() ? signIn() : query.refetch())}
           />
         </If>
       }

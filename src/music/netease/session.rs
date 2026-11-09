@@ -14,8 +14,8 @@ use super::{
     client::{NetEaseClient, QrPollResult},
     player::PlayerManager,
 };
-use crate::spotify::{
-    bridge::Command,
+use crate::music::{
+    command::Command,
     model::{EngineError, ErrorCode, Health, Player},
     paths::Paths,
     session::{Answer, Request, Session, Snapshot},
@@ -25,16 +25,10 @@ use crate::spotify::{
 pub fn start(paths: Paths) -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
     let (requests, queue) = mpsc::channel();
     let client = Arc::new(NetEaseClient::new(&paths.data));
-    let initial_signed_in = if client.is_signed_in() {
-        Some(true)
-    } else {
-        Some(false)
-    };
-
     let initial_snapshot = Snapshot {
         player: Player::default(),
         health: Health::ready(),
-        signed_in: initial_signed_in,
+        signed_in: Some(client.is_signed_in()),
         auth: 0,
     };
 
@@ -98,7 +92,6 @@ impl NetEaseRunner {
                     if let Some(ref mut p) = self.player {
                         let _ = p.pause();
                     }
-                    self.snapshot.signed_in = Some(false);
                     self.snapshot.health = Health::ready();
                     self.snapshot.auth += 1;
                     self.publish();
@@ -107,7 +100,6 @@ impl NetEaseRunner {
                     self.snapshot.health = Health::ready();
                     self.publish();
                 }
-                Ok(Request::SetBridge(_)) => {}
                 Ok(Request::Shutdown(ack)) => {
                     if let Some(ref mut p) = self.player {
                         let _ = p.pause();
@@ -115,7 +107,6 @@ impl NetEaseRunner {
                     let _ = ack.send(());
                     break;
                 }
-                Ok(Request::Evaluated { .. }) | Ok(Request::Cookies(_)) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // Periodic tick
                 }
@@ -147,7 +138,6 @@ impl NetEaseRunner {
                         }
                         Ok(QrPollResult::Success) => {
                             self.signing_in = None;
-                            self.snapshot.signed_in = Some(true);
                             self.snapshot.health = Health::ready();
                             self.snapshot.auth += 1;
                             self.publish();
@@ -158,6 +148,11 @@ impl NetEaseRunner {
                                 ErrorCode::Timeout,
                                 "二维码已过期，请重新点击登录",
                             ));
+                            self.publish();
+                        }
+                        Err(e) if e.code == ErrorCode::SignedOut => {
+                            self.signing_in = None;
+                            self.snapshot.health = Health::signing_in_qr("", e.message);
                             self.publish();
                         }
                         Err(e) => {
@@ -174,6 +169,7 @@ impl NetEaseRunner {
     }
 
     fn publish(&mut self) {
+        self.snapshot.signed_in = Some(self.client.is_signed_in());
         if let Some(ref p) = self.player {
             self.snapshot.player = p.state();
         }
@@ -307,7 +303,7 @@ impl NetEaseRunner {
                 Ok(Value::Null)
             }
             Command::PlayTrack(uri) => {
-                let raw_id = uri.strip_prefix("spotify:track:").unwrap_or(&uri);
+                let raw_id = uri.strip_prefix("netease:track:").unwrap_or(&uri);
                 let tracks = self.client.song_details(&[raw_id.to_string()])?;
                 let track = tracks
                     .into_iter()
@@ -319,15 +315,15 @@ impl NetEaseRunner {
                 Ok(Value::Null)
             }
             Command::PlayContext { uri, track_uri } => {
-                let tracks = if uri == "spotify:collection:tracks" {
+                let tracks = if uri == "netease:collection:tracks" {
                     self.client.liked_songs()?.tracks
-                } else if uri == "spotify:playlist:daily" {
-                    self.client.playlist("spotify:playlist:daily")?.tracks
-                } else if uri.starts_with("spotify:playlist:") {
+                } else if uri == "netease:playlist:daily" {
+                    self.client.playlist("netease:playlist:daily")?.tracks
+                } else if uri.starts_with("netease:playlist:") {
                     self.client.playlist(&uri)?.tracks
-                } else if uri.starts_with("spotify:album:") {
+                } else if uri.starts_with("netease:album:") {
                     self.client.album(&uri)?.tracks
-                } else if uri.starts_with("spotify:artist:") {
+                } else if uri.starts_with("netease:artist:") {
                     self.client.artist(&uri)?.tracks
                 } else {
                     Vec::new()
@@ -339,5 +335,41 @@ impl NetEaseRunner {
                 Ok(Value::Null)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publishing_reflects_a_session_cleared_by_the_client() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-session-{}", std::process::id()));
+        std::fs::create_dir(&data).unwrap();
+        let client = Arc::new(NetEaseClient::new(&data));
+        client.save_cookie_str("MUSIC_U=fixture");
+        let snapshot = Snapshot {
+            player: Player::default(),
+            health: Health::ready(),
+            signed_in: Some(client.is_signed_in()),
+            auth: 0,
+        };
+        let (out, state) = watch::channel(snapshot.clone());
+        let (_requests, queue) = mpsc::channel();
+        let mut runner = NetEaseRunner {
+            queue,
+            out,
+            client: client.clone(),
+            player: None,
+            snapshot,
+            signing_in: None,
+        };
+        assert_eq!(state.borrow().signed_in, Some(true));
+
+        client.clear_session();
+        runner.publish();
+        std::fs::remove_dir(data).unwrap();
+
+        assert_eq!(state.borrow().signed_in, Some(false));
     }
 }

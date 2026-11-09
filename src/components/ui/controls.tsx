@@ -8,7 +8,6 @@ import { type AnimatedValue, Canvas, effect, Image, platform, type MotionSpec, r
 import type { CanvasRenderingContext2D, JSX } from "nsh";
 import { Button, Slider, Tooltip } from "nsh/base";
 import { alpha, tint } from "../../state/tint";
-import { imageFor } from "../../data/images";
 import { Icon, type IconColor, iconMotion, type IconName, SwapIcon } from "./icons";
 import { lazyMotion } from "./motion";
 import { DISTANCE, DURATION, DURATION_CLASS, EASE_CLASS, SCALE, SMOOTH_OUT } from "./tokens";
@@ -234,7 +233,7 @@ export function TextLink(props: { label: string; onPress: () => void; small?: bo
 /** An item's image, square (or round for an artist), with a glyph while it
  * has none. Sized by `size` (points) or by `class` (`w-full max-w-52`). In a
  * terminal it takes no Cells. `liked` is Liked Songs' own cover, a red heart
- * tile, in place of Spotify's artwork. */
+ * tile for the Liked Songs collection. */
 export function Cover(props: {
   src: string;
   size?: number;
@@ -258,7 +257,7 @@ export function Cover(props: {
         color={props.liked ? "liked-foreground" : "muted-foreground"}
       />
       <If when={props.src && !props.liked}>
-        <Image src={imageFor(props.src, props.size)} accessibilityElementsHidden class="absolute inset-0 object-cover" />
+        <Image src={props.src} accessibilityElementsHidden class="absolute inset-0 object-cover" />
       </If>
     </View>
   );

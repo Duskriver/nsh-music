@@ -9,7 +9,7 @@ through each platform's own native views on desktop, mobile, web and the termina
 - The NetEase Cloud Music protocol implementation is adapted from [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease).
 
 **Unofficial.** This project is not affiliated with, endorsed by or sponsored by NetEase
-(网易云音乐) or Spotify AB. All music, lyrics, artwork and trademarks belong to their
+(网易云音乐). All music, lyrics, artwork and trademarks belong to their
 respective rights holders.
 
 This project is licensed under the [Apache License 2.0](LICENSE-APACHE).

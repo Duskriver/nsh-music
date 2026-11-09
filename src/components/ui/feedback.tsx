@@ -75,15 +75,15 @@ export function Toaster(props: { bottomOffset?: number }) {
   );
 }
 
-/** A page that couldn't show its content: one plain sentence, and Retry. */
-export function ErrorState(props: { message: string; detail?: string; onRetry: () => void }) {
+/** A page that couldn't show its content: one plain sentence and a recovery action. */
+export function ErrorState(props: { message: string; detail?: string; actionLabel?: string; onRetry: () => void }) {
   return (
     <View role="alert" class="items-center gap-3 px-6 py-16">
       <Text class="text-center text-lg font-bold text-foreground">{props.message}</Text>
       <If when={props.detail}>
         <Text class="max-w-md text-center text-sm text-muted-foreground">{props.detail}</Text>
       </If>
-      <ActionButton label="Retry" onPress={props.onRetry} />
+      <ActionButton label={props.actionLabel ?? "Retry"} onPress={props.onRetry} />
     </View>
   );
 }

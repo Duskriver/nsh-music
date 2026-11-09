@@ -1,36 +1,10 @@
-//! A live audio meter, exported to TSX as `AudioMeter`: how loud the music
-//! is, its bass, mids and treble, a 16-band spectrum and a beat pulse, about
-//! 60 times a second, for visuals that move with the music
-//! (`src/platform/audio.ts`).
-//!
-//! The music plays inside the headless Chromium the engine runs. Widevine
-//! keeps Web Audio from tapping it inside the page, but the sound reaches the
-//! system mixer like any app's, so the meter records it there:
-//!
-//! - Linux: `parec` (PulseAudio, or PipeWire's pulse server) records the
-//!   sink input of Spotish's own Chromium (`--monitor-stream`), found by its
-//!   `application.process.id` being a descendant of this process; without
-//!   one it records the default sink's monitor (everything that plays). The
-//!   stream is looked for again every few seconds, so the meter follows the
-//!   browser being restarted.
-//! - macOS 14.2+: a Core Audio process tap on the processes of Spotish's own
-//!   Chromium that play (its audio service), private and unmuted, read
-//!   through a private aggregate device and resampled to 48 kHz. The first
-//!   tap asks for "System Audio Recording" (`NSAudioCaptureUsageDescription`
-//!   in nsh.json). Older macOS: unavailable.
-//! - Windows and elsewhere: unavailable (`available` is false, no frames).
-//!   TODO: WASAPI process loopback
-//!   (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`, Windows 10 2004+).
-//!
-//! The analysis runs on a thread of its own (see [`analysis`]); frames reach
-//! JS through a channel pumped by `run()`, as `MediaControls` and
-//! `SystemTheme` deliver theirs. After a second of silence one zero frame is
-//! sent and delivery pauses until sound returns.
+//! The live audio meter reads PCM samples from the native player and publishes
+//! loudness, a 16-band spectrum, and a beat pulse for the music visuals.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use nsh_core::prelude::*;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{oneshot, watch};
 
 /// One moment of the music, every value from 0 to 1. Quiet and loud tracks
 /// move alike: each value is measured against what was loud a few seconds
@@ -67,14 +41,11 @@ pub const BANDS: usize = 16;
 struct Inner {
     next: u64,
     listeners: Vec<(u64, Callback<AudioFrame>)>,
-    rx: Option<UnboundedReceiver<AudioFrame>>,
-    tx: Option<UnboundedSender<AudioFrame>>,
-    capture: Option<capture::Capture>,
+    stop: Option<oneshot::Sender<()>>,
 }
 
-/// A live meter of the music Spotish plays: loudness, bass, mids, treble, a
+/// A live meter of the music nsh-music plays: loudness, bass, mids, treble, a
 /// spectrum and a beat pulse, about 60 frames a second while sound plays.
-/// Linux only for now; elsewhere `available` is false and no frames come.
 #[class]
 pub struct AudioMeter {
     inner: Rc<RefCell<Inner>>,
@@ -90,15 +61,13 @@ impl Default for AudioMeter {
 impl AudioMeter {
     /// Makes a meter; it records nothing until `run()`.
     pub fn new() -> Self {
-        let (tx, rx) = unbounded_channel();
-        AudioMeter { inner: Rc::new(RefCell::new(Inner { rx: Some(rx), tx: Some(tx), ..Inner::default() })) }
+        AudioMeter { inner: Rc::new(RefCell::new(Inner::default())) }
     }
 
-    /// Whether the system's audio can be recorded here (Linux with `parec`,
-    /// macOS 14.2+).
+    /// Whether the native PCM tap is supported.
     #[getter]
     pub fn available(&self) -> bool {
-        capture::available()
+        true
     }
 
     /// Calls `listener` with each frame (at most about 60 a second; one
@@ -116,55 +85,49 @@ impl AudioMeter {
         Stop::new(move || inner.borrow_mut().listeners.retain(|(i, _)| *i != id))
     }
 
-    /// Starts recording and delivers frames to the `onFrame` listeners;
-    /// resolves when the meter stops (at once where it is unavailable).
+    /// Starts analyzing samples and delivers frames to the `onFrame` listeners;
+    /// resolves when the meter stops.
     /// Call it once.
     pub async fn run(this: Instance<Self>) {
         let inner = this.with(|s| s.inner.clone());
-        // Not kept: disposing the meter stops it (its drop ends the
-        // capture, which ends this loop).
-        drop(this);
-        let (Some(mut rx), Some(tx)) = ({
-            let mut w = inner.borrow_mut();
-            (w.rx.take(), w.tx.take())
-        }) else {
+        // Disposing the meter drops the stop sender and closes the frame channel.
+        if inner.borrow().stop.is_some() {
             return;
-        };
-        let capture = capture::Capture::start(tx.clone());
-        inner.borrow_mut().capture = capture;
-        let tx_tap = tx.clone();
-        std::thread::Builder::new()
-            .name("netease-meter-tap".into())
-            .spawn(move || {
-                let mut tap_rx = crate::spotify::netease::get_audio_tap().subscribe();
-                let mut analyzer = analysis::Analyzer::new();
-                let mut emitter = analysis::Emitter::new();
-                while let Ok(sample) = tap_rx.blocking_recv() {
-                    analyzer.push(&[sample], 1, |levels| {
-                        if let Some(frame) = emitter.step(levels) {
-                            let _ = tx_tap.send(frame);
-                        }
-                    });
+        }
+        let (stop, mut stopped) = oneshot::channel();
+        inner.borrow_mut().stop = Some(stop);
+        drop(this);
+
+        let (tx, mut rx) = watch::channel(None);
+        if let Err(error) = std::thread::Builder::new()
+            .name("nsh-music-meter".into())
+            .spawn(move || meter_samples(tx))
+        {
+            log::warn!("could not start the audio meter: {error}");
+            inner.borrow_mut().stop = None;
+            return;
+        }
+
+        loop {
+            tokio::select! {
+                _ = &mut stopped => break,
+                changed = rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
                 }
-            })
-            .ok();
-        while let Some(mut frame) = rx.recv().await {
-            // Behind: only the newest frame matters.
-            while let Ok(newer) = rx.try_recv() {
-                frame = newer;
             }
-            for (_, cb) in &inner.borrow().listeners {
-                cb.post(frame.clone());
+            if let Some(frame) = rx.borrow_and_update().as_ref() {
+                for (_, cb) in &inner.borrow().listeners {
+                    cb.post(frame.clone());
+                }
             }
         }
     }
 
-    /// Stops recording; `run()` resolves. Disposing the meter does the same.
+    /// Stops analyzing samples; `run()` resolves. Disposing the meter does the same.
     pub fn stop(&self) {
-        let mut w = self.inner.borrow_mut();
-        w.capture = None;
-        // Before `run()`: nothing will ever be sent.
-        w.tx = None;
+
     }
 }
 
@@ -174,8 +137,40 @@ impl Drop for AudioMeter {
     }
 }
 
+fn meter_samples(tx: watch::Sender<Option<AudioFrame>>) {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_time().build() else {
+        return;
+    };
+    runtime.block_on(async {
+        use tokio::sync::broadcast::error::RecvError;
+
+        let mut samples = crate::music::netease::get_audio_tap().subscribe();
+        let mut analyzer = analysis::Analyzer::new();
+        let mut emitter = analysis::Emitter::new();
+        loop {
+            let sample = tokio::select! {
+                _ = tx.closed() => break,
+                sample = tokio::time::timeout(Duration::from_secs(1), samples.recv()) => sample,
+            };
+            match sample {
+                Ok(Ok(sample)) => analyzer.push(&[sample], 1, |levels| {
+                    if let Some(frame) = emitter.step(levels) {
+                        tx.send_replace(Some(frame));
+                    }
+                }),
+                Ok(Err(RecvError::Lagged(_))) => continue,
+                Ok(Err(RecvError::Closed)) => break,
+                Err(_) => {
+                    if let Some(frame) = emitter.silence() {
+                        tx.send_replace(Some(frame));
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// The analysis: mono samples in, smoothed and auto-gained frames out.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub mod analysis {
     use std::{collections::VecDeque, sync::Arc};
 
@@ -543,974 +538,7 @@ pub mod analysis {
     }
 }
 
-#[cfg(target_os = "linux")]
-mod capture {
-    //! Recording with `parec`, on a thread of its own.
-
-    use std::{
-        io::Read,
-        path::PathBuf,
-        process::{Child, Command, Stdio},
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-            mpsc,
-        },
-        time::{Duration, Instant},
-    };
-
-    use tokio::sync::mpsc::UnboundedSender;
-
-    use super::{
-        AudioFrame,
-        analysis::{Analyzer, Emitter},
-    };
-
-    /// How often the stream is looked for again.
-    const RESOLVE_EVERY: Duration = Duration::from_secs(3);
-    /// No samples for this long counts as silence.
-    const STALL: Duration = Duration::from_secs(1);
-    const CHANNELS: usize = 2;
-
-    fn find(program: &str) -> Option<PathBuf> {
-        std::env::var_os("PATH")?
-            .to_str()?
-            .split(':')
-            .map(|dir| PathBuf::from(dir).join(program))
-            .find(|p| p.is_file())
-    }
-
-    pub fn available() -> bool {
-        static PAREC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *PAREC.get_or_init(|| find("parec").is_some())
-    }
-
-    /// What `parec` records.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum Target {
-        /// A sink input (Spotish's browser's stream).
-        Stream(u32),
-        /// The default sink's monitor: everything that plays.
-        DefaultMonitor,
-    }
-
-    /// The running recorder; dropped, it stops (and kills `parec`).
-    pub struct Capture {
-        stop: Arc<AtomicBool>,
-        child: Arc<Mutex<Option<Child>>>,
-    }
-
-    impl Capture {
-        pub fn start(tx: UnboundedSender<AudioFrame>) -> Option<Self> {
-            if !available() {
-                return None;
-            }
-            let stop = Arc::new(AtomicBool::new(false));
-            let child = Arc::new(Mutex::new(None));
-            let (s, c) = (stop.clone(), child.clone());
-            std::thread::Builder::new()
-                .name("spotish-audio".into())
-                .spawn(move || record(tx, s, c))
-                .map_err(|e| log::warn!("audio meter: no thread: {e}"))
-                .ok()?;
-            Some(Capture { stop, child })
-        }
-    }
-
-    impl Drop for Capture {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::SeqCst);
-            kill(&self.child);
-        }
-    }
-
-    fn kill(slot: &Mutex<Option<Child>>) {
-        let child = slot.lock().ok().and_then(|mut c| c.take());
-        if let Some(mut child) = child {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-
-    /// The recording thread: (re)starts `parec` on the stream to record,
-    /// analyzes what it reads, sends frames. `parec` is started here, so
-    /// it gets SIGTERM if this thread ends some other way.
-    fn record(tx: UnboundedSender<AudioFrame>, stop: Arc<AtomicBool>, slot: Arc<Mutex<Option<Child>>>) {
-        let mut analyzer = Analyzer::new();
-        let mut emitter = Emitter::new();
-        let mut target: Option<Target> = None;
-        let mut chunks: Option<mpsc::Receiver<Vec<f32>>> = None;
-        let mut next_resolve = Instant::now();
-        let mut last_data = Instant::now();
-        let send = |frame: Option<AudioFrame>| frame.is_none_or(|f| tx.send(f).is_ok());
-
-        while !stop.load(Ordering::SeqCst) {
-            if Instant::now() >= next_resolve {
-                next_resolve = Instant::now() + RESOLVE_EVERY;
-                let wanted = resolve();
-                if chunks.is_none() || target != Some(wanted) {
-                    kill(&slot);
-                    chunks = None;
-                    target = None;
-                    match spawn(wanted) {
-                        Ok((child, rx)) => {
-                            log::debug!("audio meter: recording {wanted:?}");
-                            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-                            // Stopped while starting: the drop missed it.
-                            if stop.load(Ordering::SeqCst) {
-                                kill(&slot);
-                                break;
-                            }
-                            chunks = Some(rx);
-                            target = Some(wanted);
-                            last_data = Instant::now();
-                        }
-                        Err(e) => log::warn!("audio meter: cannot start parec: {e}"),
-                    }
-                }
-            }
-            let Some(rx) = chunks.as_ref() else {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            };
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(samples) => {
-                    last_data = Instant::now();
-                    let mut open = true;
-                    analyzer.push(&samples, CHANNELS, |levels| open &= send(emitter.step(levels)));
-                    if !open {
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if last_data.elapsed() >= STALL && !send(emitter.silence()) {
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // parec ended (its stream went): look again soon.
-                    log::debug!("audio meter: parec ended");
-                    kill(&slot);
-                    chunks = None;
-                    target = None;
-                    next_resolve = Instant::now() + Duration::from_secs(1);
-                    if !send(emitter.silence()) {
-                        break;
-                    }
-                }
-            }
-        }
-        kill(&slot);
-    }
-
-    fn spawn(target: Target) -> std::io::Result<(Child, mpsc::Receiver<Vec<f32>>)> {
-        let mut command = Command::new("parec");
-        command.args([
-            "--format=float32le",
-            "--rate=48000",
-            "--channels=2",
-            "--latency-msec=20",
-            "--raw",
-            "--client-name=Spotish",
-            "--stream-name=Audio meter",
-        ]);
-        match target {
-            Target::Stream(index) => command.arg(format!("--monitor-stream={index}")),
-            Target::DefaultMonitor => command.args(["-d", "@DEFAULT_MONITOR@"]),
-        };
-        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-        die_with_parent(&mut command);
-        let mut child = command.spawn()?;
-        let Some(mut out) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::other("no stdout"));
-        };
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new().name("spotish-audio-read".into()).spawn(move || {
-            // 10 ms of stereo float32 per read.
-            let mut bytes = vec![0u8; 480 * CHANNELS * 4];
-            let mut have = 0;
-            loop {
-                match out.read(&mut bytes[have..]) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => have += n,
-                }
-                let whole = have - have % 4;
-                let samples: Vec<f32> =
-                    bytes[..whole].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
-                bytes.copy_within(whole..have, 0);
-                have -= whole;
-                if tx.send(samples).is_err() {
-                    return;
-                }
-            }
-        })?;
-        Ok((child, rx))
-    }
-
-    /// SIGTERM to `parec` when the thread that started it ends, however
-    /// the app ends (as the browser gets, `spotify::chrome`).
-    fn die_with_parent(command: &mut Command) {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: getpid is always safe.
-        let parent = unsafe { libc::getpid() };
-        // SAFETY: prctl and getppid are async-signal-safe.
-        unsafe {
-            command.pre_exec(move || {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                if libc::getppid() != parent {
-                    libc::_exit(0);
-                }
-                Ok(())
-            });
-        }
-    }
-
-    /// The stream to record: Spotish's browser's sink input, else the
-    /// default monitor.
-    fn resolve() -> Target {
-        let me = std::process::id();
-        sink_inputs()
-            .into_iter()
-            .filter(|s| s.pid.is_some_and(|pid| descends_from(pid, me)))
-            // Of several (an ad and the track, a restart), the playing one.
-            .min_by_key(|s| s.corked)
-            .map_or(Target::DefaultMonitor, |s| Target::Stream(s.index))
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct SinkInput {
-        pub index: u32,
-        pub pid: Option<u32>,
-        pub corked: bool,
-    }
-
-    fn sink_inputs() -> Vec<SinkInput> {
-        let run = |args: &[&str]| {
-            Command::new("pactl")
-                .args(args)
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        };
-        if let Some(list) = run(&["-f", "json", "list", "sink-inputs"]).and_then(|j| parse_json(&j)) {
-            return list;
-        }
-        run(&["list", "sink-inputs"]).map(|t| parse_text(&t)).unwrap_or_default()
-    }
-
-    /// `pactl -f json list sink-inputs`.
-    pub fn parse_json(text: &str) -> Option<Vec<SinkInput>> {
-        let items: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
-        Some(
-            items
-                .iter()
-                .filter_map(|item| {
-                    let index = u32::try_from(item.get("index")?.as_u64()?).ok()?;
-                    let props = item.get("properties");
-                    let pid = props
-                        .and_then(|p| p.get("application.process.id"))
-                        .and_then(|v| v.as_str().map(str::to_owned).or_else(|| v.as_u64().map(|n| n.to_string())))
-                        .and_then(|s| s.parse().ok());
-                    let corked = item.get("corked").and_then(|v| v.as_bool()).unwrap_or(false);
-                    Some(SinkInput { index, pid, corked })
-                })
-                .collect(),
-        )
-    }
-
-    /// `pactl list sink-inputs` (older pactl, no JSON).
-    pub fn parse_text(text: &str) -> Vec<SinkInput> {
-        let mut out: Vec<SinkInput> = Vec::new();
-        for line in text.lines() {
-            let line = line.trim();
-            if let Some(n) = line.strip_prefix("Sink Input #") {
-                if let Ok(index) = n.trim().parse() {
-                    out.push(SinkInput { index, pid: None, corked: false });
-                }
-            } else if let Some(last) = out.last_mut() {
-                if let Some(v) = line.strip_prefix("application.process.id = ") {
-                    last.pid = v.trim_matches('"').parse().ok();
-                } else if let Some(v) = line.strip_prefix("Corked:") {
-                    last.corked = v.trim() == "yes";
-                }
-            }
-        }
-        out
-    }
-
-    /// Whether `pid` is `ancestor` or one of its descendants.
-    fn descends_from(mut pid: u32, ancestor: u32) -> bool {
-        for _ in 0..64 {
-            if pid == ancestor {
-                return true;
-            }
-            match parent_of(pid) {
-                Some(p) if p > 1 => pid = p,
-                _ => return false,
-            }
-        }
-        false
-    }
-
-    fn parent_of(pid: u32) -> Option<u32> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        parse_ppid(&stat)
-    }
-
-    /// The parent in `/proc/<pid>/stat`: the second field after the
-    /// command, which is in parentheses and may hold anything.
-    pub fn parse_ppid(stat: &str) -> Option<u32> {
-        let rest = &stat[stat.rfind(')')? + 1..];
-        rest.split_whitespace().nth(1)?.parse().ok()
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn parses_pactl_json() {
-            let json = r#"[{"index":4914,"corked":false,"properties":{"application.process.id":"1690598","application.name":"Chromium"}},
-                {"index":7,"corked":true,"properties":{}}]"#;
-            assert_eq!(
-                parse_json(json).unwrap(),
-                vec![
-                    SinkInput { index: 4914, pid: Some(1_690_598), corked: false },
-                    SinkInput { index: 7, pid: None, corked: true },
-                ]
-            );
-            assert!(parse_json("not json").is_none());
-        }
-
-        #[test]
-        fn parses_pactl_text() {
-            let text = "Sink Input #12\n\tDriver: PipeWire\n\tCorked: yes\n\tProperties:\n\t\tapplication.name = \"Chromium\"\n\t\tapplication.process.id = \"4321\"\n\nSink Input #13\n\tCorked: no\n";
-            assert_eq!(
-                parse_text(text),
-                vec![
-                    SinkInput { index: 12, pid: Some(4321), corked: true },
-                    SinkInput { index: 13, pid: None, corked: false },
-                ]
-            );
-        }
-
-        #[test]
-        fn reads_the_parent_from_proc_stat() {
-            assert_eq!(parse_ppid("123 (chromium (audio)) S 456 123 123 0"), Some(456));
-            let me = std::process::id();
-            assert!(descends_from(me, me));
-            assert_eq!(parent_of(me), Some(std::os::unix::process::parent_id()));
-            assert!(!descends_from(1, me));
-        }
-
-        /// Records 2 s of the default monitor (sound or not):
-        /// `cargo test -- --ignored records_the_default_monitor`.
-        #[test]
-        #[ignore]
-        fn records_the_default_monitor() {
-            let (child, rx) = spawn(Target::DefaultMonitor).expect("parec");
-            let slot = Mutex::new(Some(child));
-            let deadline = Instant::now() + Duration::from_secs(2);
-            let mut analyzer = Analyzer::new();
-            let (mut samples, mut steps, mut loud) = (0, 0, 0);
-            while Instant::now() < deadline {
-                if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-                    samples += chunk.len();
-                    analyzer.push(&chunk, CHANNELS, |l| {
-                        steps += 1;
-                        loud += usize::from(l.loud);
-                    });
-                }
-            }
-            kill(&slot);
-            eprintln!("recorded {samples} samples, {steps} steps ({loud} with sound); target now {:?}", resolve());
-            assert!(steps > 100, "got {steps} steps from {samples} samples");
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod capture {
-    //! Recording with a Core Audio process tap (macOS 14.2+), on a thread of
-    //! its own.
-    //!
-    //! The tap mixes down to stereo what Spotish's own processes play (the
-    //! browser's audio service is a child of its browser, which is a child
-    //! of Spotish), without muting it, and only for this app (a private
-    //! tap). It reaches an IO proc through a private aggregate device made
-    //! for it. Which processes play is looked for again every few seconds:
-    //! the audio service appears once the music starts, and the browser may
-    //! be restarted. The first tap asks the user for "System Audio
-    //! Recording" (`NSAudioCaptureUsageDescription`); refused, the tap
-    //! hears silence and the light rests.
-    //!
-    //! The tap and its class are looked up at run time, not linked: on an
-    //! older macOS they are missing, and the meter is unavailable.
-
-    use std::{
-        ffi::{CStr, c_void},
-        ptr::NonNull,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-            mpsc,
-        },
-        time::{Duration, Instant},
-    };
-
-    use objc2::{AnyThread, rc::Retained, runtime::AnyClass};
-    use objc2_core_audio::{
-        AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop,
-        AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice, AudioObjectGetPropertyData,
-        AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress, CATapDescription,
-        kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceNameKey, kAudioAggregateDeviceTapAutoStartKey,
-        kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey, kAudioHardwarePropertyProcessObjectList,
-        kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
-        kAudioProcessPropertyPID, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, kAudioTapPropertyFormat,
-    };
-    use objc2_core_audio_types::{AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp};
-    use objc2_core_foundation::CFDictionary;
-    use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSObject, NSString, NSUUID};
-    use tokio::sync::mpsc::UnboundedSender;
-
-    use super::{
-        AudioFrame,
-        analysis::{Analyzer, Emitter, SAMPLE_RATE},
-    };
-
-    /// How often the processes that play are looked for again.
-    const RESOLVE_EVERY: Duration = Duration::from_secs(3);
-    /// No samples for this long counts as silence.
-    const STALL: Duration = Duration::from_secs(1);
-    /// The tap's stereo mixdown.
-    const CHANNELS: usize = 2;
-
-    type CreateTap = unsafe extern "C-unwind" fn(*const CATapDescription, *mut AudioObjectID) -> i32;
-    type DestroyTap = unsafe extern "C-unwind" fn(AudioObjectID) -> i32;
-
-    /// The tap's two functions, where this macOS has them (14.2+).
-    struct TapApi {
-        create: CreateTap,
-        destroy: DestroyTap,
-    }
-
-    fn tap_api() -> Option<&'static TapApi> {
-        static API: std::sync::OnceLock<Option<TapApi>> = std::sync::OnceLock::new();
-        API.get_or_init(|| {
-            // SAFETY: dlsym on the process's own images; the names are
-            // NUL-terminated, and the symbols, when present, have these
-            // signatures (CoreAudio's AudioHardware.h).
-            unsafe {
-                let create = libc::dlsym(libc::RTLD_DEFAULT, c"AudioHardwareCreateProcessTap".as_ptr());
-                let destroy = libc::dlsym(libc::RTLD_DEFAULT, c"AudioHardwareDestroyProcessTap".as_ptr());
-                if create.is_null() || destroy.is_null() || AnyClass::get(c"CATapDescription").is_none() {
-                    return None;
-                }
-                Some(TapApi {
-                    create: std::mem::transmute::<*mut c_void, CreateTap>(create),
-                    destroy: std::mem::transmute::<*mut c_void, DestroyTap>(destroy),
-                })
-            }
-        })
-        .as_ref()
-    }
-
-    pub fn available() -> bool {
-        tap_api().is_some()
-    }
-
-    /// The running recorder; dropped, it stops (and its tap goes).
-    pub struct Capture {
-        stop: Arc<AtomicBool>,
-    }
-
-    impl Capture {
-        pub fn start(tx: UnboundedSender<AudioFrame>) -> Option<Self> {
-            tap_api()?;
-            let stop = Arc::new(AtomicBool::new(false));
-            let s = stop.clone();
-            std::thread::Builder::new()
-                .name("spotish-audio".into())
-                .spawn(move || record(tx, s))
-                .map_err(|e| log::warn!("audio meter: no thread: {e}"))
-                .ok()?;
-            Some(Capture { stop })
-        }
-    }
-
-    impl Drop for Capture {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::SeqCst);
-        }
-    }
-
-    /// The recording thread: (re)taps the processes that play, analyzes
-    /// what the tap hears, sends frames. The tap is made and ended here.
-    fn record(tx: UnboundedSender<AudioFrame>, stop: Arc<AtomicBool>) {
-        let mut analyzer = Analyzer::new();
-        let mut emitter = Emitter::new();
-        let mut tap: Option<Tap> = None;
-        let mut tapped: Vec<AudioObjectID> = Vec::new();
-        let mut resampler = Resampler::default();
-        let mut next_resolve = Instant::now();
-        let mut last_data = Instant::now();
-        let send = |frame: Option<AudioFrame>| frame.is_none_or(|f| tx.send(f).is_ok());
-
-        while !stop.load(Ordering::SeqCst) {
-            if Instant::now() >= next_resolve {
-                next_resolve = Instant::now() + RESOLVE_EVERY;
-                let wanted = own_processes();
-                if wanted != tapped {
-                    tap = None;
-                    tapped.clear();
-                    if !wanted.is_empty() {
-                        match Tap::start(&wanted) {
-                            Ok(t) => {
-                                log::debug!("audio meter: tapping {} process(es) at {} Hz", wanted.len(), t.rate);
-                                resampler = Resampler::new(t.rate);
-                                tap = Some(t);
-                                tapped = wanted;
-                                last_data = Instant::now();
-                            }
-                            Err(e) => log::warn!("audio meter: cannot tap the browser: {e}"),
-                        }
-                    }
-                }
-            }
-            let Some(t) = tap.as_ref() else {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            };
-            match t.chunks.recv_timeout(Duration::from_millis(100)) {
-                Ok(samples) => {
-                    last_data = Instant::now();
-                    let samples = resampler.run(&samples);
-                    let mut open = true;
-                    analyzer.push(&samples, CHANNELS, |levels| open &= send(emitter.step(levels)));
-                    if !open {
-                        break;
-                    }
-                }
-                Err(_) => {
-                    if last_data.elapsed() >= STALL && !send(emitter.silence()) {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Stereo frames from the tap's rate to the analysis's (48 kHz),
-    /// linearly: enough for levels and a 16-band spectrum.
-    #[derive(Default)]
-    struct Resampler {
-        /// Input frames per output frame; 0: none needed.
-        step: f64,
-        /// Where the next output frame falls, in input frames from the
-        /// start of the pending ones.
-        at: f64,
-        /// The last input frame of the previous chunk.
-        last: [f32; CHANNELS],
-    }
-
-    impl Resampler {
-        fn new(rate: f64) -> Self {
-            let step = rate / f64::from(SAMPLE_RATE);
-            Resampler { step: if (step - 1.0).abs() < 1e-6 { 0.0 } else { step }, ..Resampler::default() }
-        }
-
-        fn run(&mut self, interleaved: &[f32]) -> Vec<f32> {
-            if self.step == 0.0 {
-                return interleaved.to_vec();
-            }
-            let frames = interleaved.len() / CHANNELS;
-            // Frame -1 is the previous chunk's last, so output never skips
-            // the seam between chunks.
-            let frame = |i: isize, c: usize| if i < 0 { self.last[c] } else { interleaved[i as usize * CHANNELS + c] };
-            let mut out = Vec::with_capacity((frames as f64 / self.step) as usize * CHANNELS + CHANNELS);
-            let mut at = self.at;
-            while at < frames as f64 - 1.0 {
-                let i = at.floor();
-                let t = (at - i) as f32;
-                let i = i as isize;
-                for c in 0..CHANNELS {
-                    out.push(frame(i, c) + (frame(i + 1, c) - frame(i, c)) * t);
-                }
-                at += self.step;
-            }
-            if frames > 0 {
-                for c in 0..CHANNELS {
-                    self.last[c] = interleaved[(frames - 1) * CHANNELS + c];
-                }
-            }
-            self.at = at - frames as f64;
-            out
-        }
-    }
-
-    fn address(selector: u32) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress {
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        }
-    }
-
-    /// A fixed-size property of `object` (a plain C value: all zeros is
-    /// one).
-    fn property<T: Copy>(object: AudioObjectID, selector: u32) -> Option<T> {
-        let address = address(selector);
-        // SAFETY: T is a plain C value (an integer, a struct of them).
-        let mut value: T = unsafe { std::mem::zeroed() };
-        let mut size = std::mem::size_of::<T>() as u32;
-        // SAFETY: `value` is a `T` of `size` bytes, as the property is.
-        let status = unsafe {
-            AudioObjectGetPropertyData(
-                object,
-                NonNull::from(&address),
-                0,
-                std::ptr::null(),
-                NonNull::from(&mut size),
-                NonNull::from(&mut value).cast(),
-            )
-        };
-        (status == 0).then_some(value)
-    }
-
-    /// The process objects of Core Audio (the processes that use audio)
-    /// that are Spotish's descendants, sorted.
-    fn own_processes() -> Vec<AudioObjectID> {
-        let address = address(kAudioHardwarePropertyProcessObjectList);
-        let mut size = 0u32;
-        // SAFETY: the system object's process list, an array of
-        // AudioObjectIDs `size` bytes long.
-        let objects = unsafe {
-            if AudioObjectGetPropertyDataSize(
-                kAudioObjectSystemObject as AudioObjectID,
-                NonNull::from(&address),
-                0,
-                std::ptr::null(),
-                NonNull::from(&mut size),
-            ) != 0
-            {
-                return Vec::new();
-            }
-            let mut objects = vec![0 as AudioObjectID; size as usize / std::mem::size_of::<AudioObjectID>()];
-            if AudioObjectGetPropertyData(
-                kAudioObjectSystemObject as AudioObjectID,
-                NonNull::from(&address),
-                0,
-                std::ptr::null(),
-                NonNull::from(&mut size),
-                NonNull::new_unchecked(objects.as_mut_ptr()).cast(),
-            ) != 0
-            {
-                return Vec::new();
-            }
-            objects.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
-            objects
-        };
-        let me = std::process::id() as libc::pid_t;
-        let mut own: Vec<_> = objects
-            .into_iter()
-            .filter(|&object| {
-                property::<libc::pid_t>(object, kAudioProcessPropertyPID).is_some_and(|pid| descends_from(pid, me))
-            })
-            .collect();
-        own.sort_unstable();
-        own
-    }
-
-    /// Whether `pid` is a descendant of `ancestor` (not itself).
-    fn descends_from(mut pid: libc::pid_t, ancestor: libc::pid_t) -> bool {
-        for _ in 0..16 {
-            let Some(parent) = parent_of(pid) else { return false };
-            if parent == ancestor {
-                return true;
-            }
-            if parent <= 1 {
-                return false;
-            }
-            pid = parent;
-        }
-        false
-    }
-
-    fn parent_of(pid: libc::pid_t) -> Option<libc::pid_t> {
-        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // SAFETY: `info` is a proc_bsdinfo of `size` bytes.
-        let n = unsafe {
-            libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
-        };
-        (n == size).then_some(info.pbi_ppid as libc::pid_t)
-    }
-
-    fn key(name: &CStr) -> Retained<NSString> {
-        NSString::from_str(name.to_str().unwrap_or_default())
-    }
-
-    /// A tap on some processes, its aggregate device and IO proc; dropped,
-    /// all three go.
-    struct Tap {
-        tap: AudioObjectID,
-        device: AudioObjectID,
-        proc_id: AudioDeviceIOProcID,
-        /// The IO proc's state, freed after the proc is destroyed.
-        state: *mut ProcState,
-        rate: f64,
-        chunks: mpsc::Receiver<Vec<f32>>,
-    }
-
-    /// What the IO proc reads from: where its samples go.
-    struct ProcState {
-        tx: mpsc::Sender<Vec<f32>>,
-    }
-
-    impl Tap {
-        fn start(processes: &[AudioObjectID]) -> Result<Self, String> {
-            let api = tap_api().ok_or("no process taps on this macOS")?;
-            let ids: Vec<Retained<NSNumber>> = processes.iter().map(|&p| NSNumber::new_u32(p)).collect();
-            let ids = NSArray::from_retained_slice(&ids);
-            // SAFETY: CATapDescription exists (checked by `tap_api`); the
-            // array holds NSNumbers of process objects, as the initializer
-            // takes.
-            let description = unsafe {
-                let d = CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &ids);
-                d.setPrivate(true);
-                d
-            };
-            let mut tap: AudioObjectID = 0;
-            // SAFETY: a valid description and out pointer.
-            let status = unsafe { (api.create)(Retained::as_ptr(&description), &mut tap) };
-            if status != 0 {
-                return Err(format!("AudioHardwareCreateProcessTap: {status}"));
-            }
-            let mut this = Tap {
-                tap,
-                device: 0,
-                proc_id: None,
-                state: std::ptr::null_mut(),
-                rate: 0.0,
-                chunks: mpsc::channel().1,
-            };
-            let format: AudioStreamBasicDescription =
-                property(tap, kAudioTapPropertyFormat).ok_or("the tap has no format")?;
-            this.rate = format.mSampleRate;
-            // SAFETY: the tap's UUID, which the aggregate device names.
-            let tap_uid = unsafe { description.UUID() }.UUIDString();
-            let sub_tap: Retained<NSDictionary<NSString, NSObject>> = NSDictionary::from_retained_objects(
-                &[&*key(kAudioSubTapUIDKey), &*key(kAudioSubTapDriftCompensationKey)],
-                &[Retained::into_super(tap_uid), Retained::into_super(Retained::into_super(NSNumber::new_bool(true)))],
-            );
-            let taps = NSArray::from_retained_slice(&[sub_tap]);
-            let device_uid = NSUUID::new().UUIDString();
-            let one = || Retained::into_super(Retained::into_super(NSNumber::new_i32(1)));
-            let description: Retained<NSDictionary<NSString, NSObject>> = NSDictionary::from_retained_objects(
-                &[
-                    &*key(kAudioAggregateDeviceNameKey),
-                    &*key(kAudioAggregateDeviceUIDKey),
-                    &*key(kAudioAggregateDeviceIsPrivateKey),
-                    &*key(kAudioAggregateDeviceTapAutoStartKey),
-                    &*key(kAudioAggregateDeviceTapListKey),
-                ],
-                &[
-                    Retained::into_super(NSString::from_str("Spotish audio meter")),
-                    Retained::into_super(device_uid),
-                    one(),
-                    one(),
-                    Retained::into_super(taps),
-                ],
-            );
-            let mut device: AudioObjectID = 0;
-            // SAFETY: an NSDictionary is a CFDictionary (toll-free
-            // bridged), of the keys and values the call takes.
-            let status = unsafe {
-                AudioHardwareCreateAggregateDevice(
-                    &*(Retained::as_ptr(&description) as *const CFDictionary),
-                    NonNull::from(&mut device),
-                )
-            };
-            if status != 0 {
-                return Err(format!("AudioHardwareCreateAggregateDevice: {status}"));
-            }
-            this.device = device;
-            let (tx, rx) = mpsc::channel();
-            this.chunks = rx;
-            this.state = Box::into_raw(Box::new(ProcState { tx }));
-            let mut proc_id: AudioDeviceIOProcID = None;
-            // SAFETY: `io_proc` reads `state` as a ProcState, which lives
-            // until the proc is destroyed (`drop`).
-            let status = unsafe {
-                AudioDeviceCreateIOProcID(device, Some(io_proc), this.state.cast(), NonNull::from(&mut proc_id))
-            };
-            if status != 0 {
-                return Err(format!("AudioDeviceCreateIOProcID: {status}"));
-            }
-            this.proc_id = proc_id;
-            // SAFETY: the device and the proc made above.
-            let status = unsafe { AudioDeviceStart(device, proc_id) };
-            if status != 0 {
-                return Err(format!("AudioDeviceStart: {status}"));
-            }
-            Ok(this)
-        }
-    }
-
-    impl Drop for Tap {
-        fn drop(&mut self) {
-            // SAFETY: each made by `start` (0 / None: not made); the proc is
-            // stopped and destroyed before its state is freed.
-            unsafe {
-                if self.device != 0 {
-                    if self.proc_id.is_some() {
-                        AudioDeviceStop(self.device, self.proc_id);
-                        AudioDeviceDestroyIOProcID(self.device, self.proc_id);
-                    }
-                    AudioHardwareDestroyAggregateDevice(self.device);
-                }
-                if !self.state.is_null() {
-                    drop(Box::from_raw(self.state));
-                }
-                if let Some(api) = tap_api() {
-                    (api.destroy)(self.tap);
-                }
-            }
-        }
-    }
-
-    /// The aggregate device's IO proc: copies the tap's input out as
-    /// interleaved stereo (one buffer of interleaved frames, or one buffer
-    /// per channel).
-    unsafe extern "C-unwind" fn io_proc(
-        _device: AudioObjectID,
-        _now: NonNull<AudioTimeStamp>,
-        input: NonNull<AudioBufferList>,
-        _input_time: NonNull<AudioTimeStamp>,
-        _output: NonNull<AudioBufferList>,
-        _output_time: NonNull<AudioTimeStamp>,
-        state: *mut c_void,
-    ) -> i32 {
-        // SAFETY: `state` is the ProcState `start` gave, alive while the
-        // proc is; `input` is the device's buffer list for this cycle.
-        let (state, list) = unsafe { (&*(state as *const ProcState), input.as_ref()) };
-        let count = list.mNumberBuffers as usize;
-        // SAFETY: the list holds `count` buffers (a C flexible array).
-        let buffers = unsafe { std::slice::from_raw_parts(list.mBuffers.as_ptr(), count) };
-        let floats = |b: &objc2_core_audio_types::AudioBuffer| -> &[f32] {
-            if b.mData.is_null() {
-                return &[];
-            }
-            // SAFETY: the tap's samples are 32-bit floats, `mDataByteSize`
-            // bytes of them.
-            unsafe { std::slice::from_raw_parts(b.mData as *const f32, b.mDataByteSize as usize / 4) }
-        };
-        let samples = match buffers {
-            [one] if one.mNumberChannels as usize == CHANNELS => floats(one).to_vec(),
-            [one] => floats(one).iter().flat_map(|&s| [s, s]).collect(),
-            [left, right, ..] => floats(left).iter().zip(floats(right)).flat_map(|(&l, &r)| [l, r]).collect(),
-            [] => return 0,
-        };
-        if !samples.is_empty() {
-            let _ = state.tx.send(samples);
-        }
-        0
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn resamples_44_1_khz_to_48() {
-            let mut r = Resampler::new(44_100.0);
-            // A ramp over two chunks: the output stays a ramp, at 48 kHz.
-            let chunk = |from: usize| (from..from + 441).flat_map(|i| [i as f32, -(i as f32)]).collect::<Vec<_>>();
-            let mut out = r.run(&chunk(0));
-            out.extend(r.run(&chunk(441)));
-            let frames = out.len() / CHANNELS;
-            assert!((955..=961).contains(&frames), "{frames} frames");
-            for w in out.chunks(CHANNELS).collect::<Vec<_>>().windows(2) {
-                let step = w[1][0] - w[0][0];
-                assert!((step - 44.1 / 48.0).abs() < 1e-3, "step {step}");
-                assert_eq!(w[1][1], -w[1][0]);
-            }
-        }
-
-        #[test]
-        fn passes_48_khz_through() {
-            let mut r = Resampler::new(48_000.0);
-            let samples: Vec<f32> = (0..96).map(|i| i as f32).collect();
-            assert_eq!(r.run(&samples), samples);
-        }
-
-        /// Taps a child that plays a sound and hears it. Needs a speaker
-        /// and the "System Audio Recording" permission for the terminal:
-        /// `cargo test --lib audio -- --ignored --nocapture`.
-        #[test]
-        #[ignore]
-        fn taps_a_child_that_plays() {
-            if !available() {
-                eprintln!("no process taps on this macOS");
-                return;
-            }
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let mut child = std::process::Command::new("afplay")
-                .args(["-t", "6", "/System/Library/Sounds/Submarine.aiff"])
-                .spawn()
-                .unwrap();
-            let capture = Capture::start(tx).unwrap();
-            let until = Instant::now() + Duration::from_secs(8);
-            let mut loudest = 0.0f64;
-            while Instant::now() < until {
-                while let Ok(frame) = rx.try_recv() {
-                    loudest = loudest.max(frame.level);
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            drop(capture);
-            let _ = child.kill();
-            let _ = child.wait();
-            eprintln!("loudest level {loudest}");
-            assert!(loudest > 0.05, "heard nothing (level {loudest})");
-        }
-
-        #[test]
-        fn this_process_is_not_its_own_descendant() {
-            let me = std::process::id() as libc::pid_t;
-            assert!(!descends_from(me, me));
-            assert!(parent_of(me).is_some());
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-mod capture {
-    //! No recording here yet: see the module's notes.
-
-    use tokio::sync::mpsc::UnboundedSender;
-
-    use super::AudioFrame;
-
-    pub fn available() -> bool {
-        false
-    }
-
-    pub struct Capture;
-
-    impl Capture {
-        pub fn start(_tx: UnboundedSender<AudioFrame>) -> Option<Self> {
-            None
-        }
-    }
-}
-
-#[cfg(all(test, any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(test)]
 mod tests {
     use super::analysis::*;
 
@@ -1522,7 +550,7 @@ mod tests {
         }).collect();
         let mut a = Analyzer::new();
         let mut out = Vec::new();
-        // In parec-sized chunks, as it arrives.
+        // Feed stereo audio in chunks.
         for chunk in stereo.chunks(960) {
             a.push(chunk, 2, |l| out.push(*l));
         }

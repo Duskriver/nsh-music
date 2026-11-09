@@ -60,7 +60,7 @@ effect(() => {
       if (account() !== me.id) account.set(me.id);
       Storage.setItem(LAST_ACCOUNT, me.id).catch(() => {});
     })
-    .catch((error) => console.warn("spotish: couldn't read the account:", String(error)));
+    .catch((error) => console.warn("nsh-music: couldn't read the account:", String(error)));
 });
 
 /** The session's status (tracked). */
@@ -86,14 +86,14 @@ export function cacheAccount(): string | null {
 /** Goes up when data may load anew (tracked). */
 export const dataEpoch = () => epoch();
 
-/** Opens Spotify's login. */
+/** Starts QR sign-in. */
 export function signIn(): void {
   backend.signIn().catch((error) => report("signInFailed", error));
 }
 
-/** Closes Spotify's login without signing in. */
+/** Cancels QR sign-in. */
 export function cancelSignIn(): void {
-  backend.cancelSignIn().catch((error) => console.warn("spotish: cancel sign-in:", String(error)));
+  backend.cancelSignIn().catch((error) => console.warn("nsh-music: cancel sign-in:", String(error)));
 }
 
 /** Signs out: forgets the account's cache, goes back to Home and closes
@@ -108,7 +108,7 @@ export async function signOut(): Promise<void> {
   try {
     await backend.signOut();
   } catch (error) {
-    console.warn("spotish: sign out:", String(error));
+    console.warn("nsh-music: sign out:", String(error));
   }
 }
 

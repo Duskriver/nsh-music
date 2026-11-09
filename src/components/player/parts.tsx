@@ -5,7 +5,6 @@
 import { cleanup, createMotion, effect, type Motion, type MotionSpec, reduceMotion, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
 import { clock } from "../../backend/types";
-import { openPremium } from "../../state/links";
 import { setNowPlayingOpen } from "../../state/overlays";
 import {
   controlsEnabled,
@@ -28,7 +27,7 @@ import {
 } from "../../state/player";
 import { ready } from "../../state/session";
 import { Digits } from "../ui/digits";
-import { BarSlider, Cover, focusRing, IconButton, PlayButton, terminal, TextLink } from "../ui/controls";
+import { BarSlider, Cover, focusRing, IconButton, PlayButton, terminal } from "../ui/controls";
 import type { IconName } from "../ui/icons";
 import { lazyMotion } from "../ui/motion";
 import { DURATION, EASING, SCALE } from "../ui/tokens";
@@ -40,7 +39,7 @@ const REPEAT_LABEL = { off: "Repeat", context: "Repeat one", track: "Don't repea
 export function TransportControls(props: { large?: boolean; minimal?: boolean; quiet?: boolean }) {
   const icon = () => (props.large ? 22 : 18);
   const side = () => (props.large ? 18 : 18);
-  const usable = () => controlsEnabled() && !player().ad;
+  const usable = () => controlsEnabled();
   return (
     <View class={`flex-row items-center ${props.large ? "gap-6" : "gap-4"}`} role="toolbar" accessibilityLabel="Playback">
       <If when={!props.minimal}>
@@ -74,7 +73,7 @@ export function TransportControls(props: { large?: boolean; minimal?: boolean; q
 }
 
 /** The playback position: a slider with the elapsed and total times beside
- * it (`inline`) or under it. Seeking is off during an ad. */
+ * it (`inline`) or under it. */
 export function SeekBar(props: { inline?: boolean; quiet?: boolean }) {
   const duration = () => Math.max(1, player().durationMs);
   // The times in LED digits (`Digits`).
@@ -89,7 +88,7 @@ export function SeekBar(props: { inline?: boolean; quiet?: boolean }) {
       value={position()}
       max={duration()}
       fill={positionFill}
-      disabled={!controlsEnabled() || player().ad}
+      disabled={!controlsEnabled()}
       class="flex-1"
       onChange={dragSeek}
       onChangeEnd={seek}
@@ -234,7 +233,7 @@ export function LikeButton(props: { size?: number }) {
           size={props.size ?? 18}
           pressed={player().liked}
           pressedColor="liked"
-          disabled={!controlsEnabled() || player().ad}
+          disabled={!controlsEnabled()}
           onPress={press}
         />
       </View>
@@ -320,10 +319,8 @@ const NEW_WORDS: MotionSpec = {
 };
 
 /** What plays: the cover (`cover` points; 0 for none), which opens Now
- * Playing when `openable`, the title and the artist; during an ad, the ad's own artwork and title, and a link to
- * Premium. */
+ * Playing when `openable`, the title and the artist. */
 export function NowPlayingSummary(props: { cover?: number; round?: boolean; openable?: boolean; large?: boolean; center?: boolean }) {
-  const subtitle = () => (player().ad ? "Advertisement" : player().artist);
   // Each new track arrives: the cover, then the words (not the first one
   // shown, which comes in with the player).
   // Made with the first new track.
@@ -353,19 +350,15 @@ export function NowPlayingSummary(props: { cover?: number; round?: boolean; open
         {player().title || "Nothing playing"}
       </Text>
       <View class={`min-w-0 flex-row items-center gap-2 ${props.center ? "justify-center" : ""}`}>
-        <Text class={`line-clamp-1 min-w-0 shrink text-muted-foreground ${props.large ? "text-base" : "text-xs"} ${props.center ? "text-center" : ""}`}>{subtitle()}</Text>
-        <If when={player().ad}>
-          <TextLink label="Get Premium" onPress={openPremium} />
-        </If>
+        <Text class={`line-clamp-1 min-w-0 shrink text-muted-foreground ${props.large ? "text-base" : "text-xs"} ${props.center ? "text-center" : ""}`}>{player().artist}</Text>
       </View>
     </View>
   );
   const withCover = () => !terminal && props.cover !== 0;
-  // Openable: the whole of it (cover and words) opens Now Playing; during an
-  // ad it stays plain, its Premium link pressable on its own.
+  // Openable: the whole of it (cover and words) opens Now Playing.
   return (
     <If
-      when={props.openable && hasTrack() && !player().ad && !terminal}
+      when={props.openable && hasTrack() && !terminal}
       else={
         <View class="min-w-0 flex-1 flex-row items-center gap-3">
           <If when={withCover()}>{cover()}</If>

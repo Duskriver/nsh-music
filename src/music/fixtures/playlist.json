@@ -1,0 +1,32 @@
+{
+  "header": {
+    "uri": "netease:playlist:morningstatic",
+    "kind": "playlist",
+    "name": "Morning Static",
+    "subtitle": "Playlist \u00b7 Demo",
+    "description": "Soft starts for slow mornings."
+  },
+  "tracks": [
+    {
+      "uri": "netease:track:paperlanterns1",
+      "uid": "paperlanterns1",
+      "name": "Kites",
+      "artists": "The Quiet Fields",
+      "album": "Paper Lanterns",
+      "albumUri": "netease:album:paperlanterns",
+      "durationMs": 223000,
+      "playable": true
+    },
+    {
+      "uri": "netease:track:paperlanterns2",
+      "uid": "paperlanterns2",
+      "name": "Slow River",
+      "artists": "The Quiet Fields",
+      "album": "Paper Lanterns",
+      "albumUri": "netease:album:paperlanterns",
+      "durationMs": 251000,
+      "playable": true
+    }
+  ],
+  "total": 2
+}

@@ -1,8 +1,8 @@
-# Spotish design
+# nsh-music design
 
-How Spotish looks and moves, as built. These rules sit on top of the
+How nsh-music looks and moves, as built. These rules sit on top of the
 [NSH Design Guides](https://nsh.dev/docs/design-guides.md); where the two
-differ, these win for Spotish. Change a rule here first, then in the code;
+differ, these win for nsh-music. Change a rule here first, then in the code;
 where this document and the code disagree, fix one of them.
 
 Values below are points (pt) unless marked. File paths are relative to the
@@ -10,10 +10,8 @@ repository root.
 
 ## Principles
 
-- **Its own look.** Spotify's information architecture (sidebar, pages,
-  player bar, Now Playing), not Spotify's look. Spotish's identity lives in
-  shape, depth, type and motion, so it survives any palette the system hands
-  it.
+- **Its own look.** The red music note is the app mark. Covers and the current
+  system palette supply the interface colours.
 - **Dark, quiet, flat.** The pages, the window and Now Playing share one
   near-black. No grey content panel, no decorative gradients, no colour wash
   at the top of a page. Album art is the most colourful thing on screen.
@@ -21,7 +19,7 @@ repository root.
   from the cover. Controls stay quiet so they don't compete with it.
 - **Compact.** Don't waste rows: one band for a collection's header, one line
   per library row.
-- **Fast and light.** Spotish is NSH's showcase. Nothing redraws without a
+- **Fast and light.** Nothing redraws without a
   change to show; anything that can grow is virtualized.
 
 ## At a glance
@@ -38,7 +36,7 @@ desktop window reads like this:
   (avatar, name, a chevron) at the foot. The library fades out at its bottom
   edge.
 - **A thin header row** with no title: the sidebar toggle, Back and Forward
-  (dimmed when unavailable) at the left; Search, the Premium crown and ✕ at
+  (dimmed when unavailable) at the left; Search and ✕ at
   the right, all bare 18pt outline glyphs. With the sidebar folded, the
   user's round avatar comes first.
 - **Big bold page titles** ("Good evening", an artist's name) flush with the
@@ -223,7 +221,7 @@ the player bar floating over the pages' bottom (`inset-x-3 bottom-1`).
 `src/components/ui/title-bar.tsx`, `nsh.json` (`titleBar: hidden`, 40 high).
 
 - **macOS and Windows**: the app draws its own 40pt bar across the top: the
-  mark (18pt) and "Spotish" (`text-sm font-semibold`), clear of the traffic
+  mark (18pt) and "nsh-music" (`text-sm font-semibold`), clear of the traffic
   lights (left) or the caption buttons (right). The whole bar drags the
   window; double-click maximizes. It goes in full screen.
 - **Linux** keeps the system's title bar (`installDesktopShell`,
@@ -237,13 +235,13 @@ the player bar floating over the pages' bottom (`inset-x-3 bottom-1`).
 
 `src/components/header.tsx`, at least 56pt, inside the page on desktops:
 
-Sidebar toggle · Back · Forward · (space) · Search · Premium · Close window
+Sidebar toggle · Back · Forward · (space) · Search · Log in (signed out) · Close window
 
 - **Search** is an icon that opens into a 288pt pill field (grows from the
   right, 240ms); on the Search page it stays open and results follow typing.
   Empty, it folds back on blur or Escape.
-- **Premium** is a crown icon button with a tooltip, for free accounts, at
-  every width. Signed out, it is a primary "Log in" button instead.
+- **Log in** opens the NetEase Cloud Music QR sign-in dialog. It appears
+  while the user is signed out.
 - **Close window** (✕) closes the main window as the title bar's would: it
   hides while the tray keeps the app, and the music plays on.
 - Phones and terminals use the stack's header.
@@ -284,13 +282,12 @@ Opens up from the sidebar's foot (down from the header when the sidebar is
 folded), exactly as wide as the account row (`accountMenuWidth()`: the
 sidebar less the panel's 8 + 1 each side), so it lines up edge to edge.
 
-- First, who is signed in: a 32pt avatar, the name, "Spotify Premium" or
-  "Spotify Free".
+- First, who is signed in: a 32pt avatar, the name and Log out.
 - Rows: an icon centred in a 32pt slot (under the avatar's centre, labels
   under the name), the label, and ↗ for a page that opens in the browser, or
   a check for a setting.
-- Order: Premium ↗ (free accounts), Spotify ↗ | About…, GitHub ↗, NSH ↗, FPS
-  | Log out, Exit.
+- Order: About…, GitHub ↗, NSH ↗, FPS, then Exit. The terminal places Log out
+  before Exit.
 
 ### Cards
 
@@ -372,9 +369,7 @@ the sidebar):
 
 - Controls are quiet: a faint play disc, thin faint sliders, 18pt icons.
 - The light menu (✦) is always the last control on the right.
-- The whole left block (cover, title, artist) opens Now Playing. During an
-  ad it shows "Advertisement" and a "Get Premium" link and stays plain;
-  seeking, skipping and Like are off.
+- The whole left block (cover, title, artist) opens Now Playing.
 - Hidden (unmounted) while Now Playing covers it.
 
 The phone's mini player is a 56-high `secondary` card above the tabs: 40pt
@@ -412,9 +407,8 @@ cover, title, artist, a 36pt play button. It opens Now Playing.
 
 `src/components/ui/overlays.tsx`, `src/pages/dialogs.tsx`.
 
-- Dialogs (About, Log in to Spotify): centred, `max-w-md`, a ✕ at the top
-  right. Escape, back and the scrim close them unless the flow forbids it
-  (signing in closes only through Cancel).
+- About and QR sign-in are centred at `max-w-md`. About has a close button.
+  QR sign-in has a Cancel button and keeps the dialog open on backdrop presses.
 - Sheets: the phone's drawer (left), Now Playing (bottom, full), the
   first-run sheet (bottom, `max-w-lg` content, top corners
   `--radius-panel`).
@@ -448,11 +442,10 @@ paused or with reduced motion.
 
 ### Logo
 
-`src/ui/logo.tsx`: three rounded bars of a level meter, near-black, on a
-glossy green tile (`#5ff08f` → `#1ed760` → `#14833b`, a soft top gloss). The
-app, the website's favicon and header draw the same mark; the tray draws the
-three bars alone in the panel's text colour. Beside a title and subtitle it
-is as tall as both lines (44); in the title bar, 18.
+`icon.svg` defines a white music note on a red tile. The app and installer
+use the rendered PNG. The website uses the SVG, and the tray uses the note
+alone in the panel’s text colour. The logo is 44pt beside a title and
+subtitle, and 18pt in the title bar.
 
 ## The music light
 
@@ -574,14 +567,12 @@ playing bars rest.
 
 ## Words
 
-- Short, sentence case. Menu items say only what they are: Premium,
-  Spotify, About…, GitHub, NSH, FPS, Log out, Exit. "…" marks an item that
-  opens a dialog; ↗ one that opens the browser.
-- Say "Spotify", not "spotify.com". Log in / Log out, not sign in.
+- Use short labels in sentence case. Use “…” for a menu item that opens a
+  dialog and ↗ for an external link. Use “Log in” and “Log out” for account actions.
 - Errors are one plain sentence ("Your library didn't load.") with Retry.
 - Accessibility labels say what a control does ("Save to Liked Songs",
   "Close Now Playing", "Collapse sidebar").
-- The tray menu: "Open Spotish"; then what plays (its title, Play/Pause,
+- The tray menu: "Open nsh-music"; then what plays (its title, Play/Pause,
   Next track, Previous track, Show Now Playing); then Exit. Exit, in the tray
   and as the user menu's last row, ends the app and the music.
 
@@ -593,8 +584,8 @@ playing bars rest.
 - Lists of equal items snap (`snapToInterval`, `snapToAlignment="start"`): a
   card row at a card's start, the library at a whole row. A list under a
   header of unknown height (a collection's tracks) does not snap.
-- Pictures load at the size they show: covers up to 40pt ask Spotify for the
-  64px variant (`src/data/images.ts`).
+- NSH decodes artwork at the displayed size and caches it within the image
+  memory budget.
 - Nothing redraws every display frame without need. Shaders take their clock
   from native animated values, never `nsh.time` (which repaints the whole
   window at the display's rate), and pause with the music. The levels reach
@@ -605,6 +596,6 @@ playing bars rest.
 
 ## Architecture & Obligations
 
-- **Pure Native Engine**: The desktop and terminal shells run against the native Rust NetEase Cloud Music engine (`src/spotify/netease/`), decoding audio streams directly via `rodio` and feeding PCM samples directly into `AudioMeter` (`src/audio.rs`) for 60fps spectrum and beat-reactive visuals without requiring OS audio capture permissions.
+- **Pure Native Engine**: The desktop and terminal shells run against the native Rust NetEase Cloud Music engine (`src/music/netease/`), decoding audio streams directly via `rodio` and feeding PCM samples directly into `AudioMeter` (`src/audio.rs`) for 60fps spectrum and beat-reactive visuals without requiring OS audio capture permissions.
 - **QR Code Sign-In**: Signing in opens `SigningInDialog` (`src/pages/dialogs.tsx`) with an inline SVG QR code generated in Rust (`qrcode` crate) for scanning with the NetEase Cloud Music mobile app.
 - **Obligations**: The unofficial disclaimer stays in About and the first-run sheet, and NSH is credited.

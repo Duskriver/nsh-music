@@ -1,6 +1,4 @@
-//! A session with no browser, answering from data recorded from the web
-//! player: what the tests run on, and `SPOTISH_DEMO=1` shows (the look of
-//! the app without an account).
+//! An offline native session with sample data.
 
 use std::thread::JoinHandle;
 
@@ -8,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
-    bridge::Command,
+    command::Command,
     model::{Player, Repeat, Track},
     session::{Answer, Session, Snapshot},
 };
@@ -47,7 +45,7 @@ fn demo_lyrics() -> Value {
     json!({ "synced": true, "lines": lines, "provider": "Demo" })
 }
 
-/// What the demo's bridge answers to `command`.
+/// The sample response for `command`.
 pub fn answer(command: &Command) -> Answer {
     match command {
         Command::Home => Ok(parse(HOME)),
@@ -65,8 +63,8 @@ pub fn answer(command: &Command) -> Answer {
         Command::Library => {
             let home = parse(HOME);
             let mut items = vec![json!({
-                "uri": "spotify:collection:tracks", "kind": "collection", "name": "Liked Songs",
-                "subtitle": "12 songs", "image": ""
+                "uri": "netease:collection:tracks", "kind": "collection", "name": "Liked Songs",
+                "subtitle": "2 songs", "image": ""
             })];
             for section in home["sections"].as_array().into_iter().flatten() {
                 for item in section["items"].as_array().into_iter().flatten() {
@@ -83,8 +81,8 @@ pub fn answer(command: &Command) -> Answer {
         Command::LikedSongs => {
             let mut album = parse(ALBUM);
             album["header"] = json!({
-                "uri": "spotify:collection:tracks", "kind": "collection", "name": "Liked Songs",
-                "subtitle": "12 songs", "image": "", "description": ""
+                "uri": "netease:collection:tracks", "kind": "collection", "name": "Liked Songs",
+                "subtitle": "2 songs", "image": "", "description": ""
             });
             Ok(album)
         }
@@ -120,7 +118,7 @@ fn now_ms() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0)
 }
 
-/// The demo's player: the first track of the recorded album, paused.
+/// The demo's player: the first track of the sample album, paused.
 pub fn player() -> Player {
     let album: Value = parse(ALBUM);
     let track: Track = serde_json::from_value(album["tracks"][0].clone()).unwrap_or_default();
@@ -130,7 +128,7 @@ pub fn player() -> Player {
         album: track.album,
         artwork: track.image,
         track_uri: track.uri,
-        context_href: "/album/6dVIqQ8qmQ5GBnJ9shOYGE".into(),
+        context_href: "/album/paperlanterns".into(),
         playing: false,
         can_play: true,
         position_ms: 64_000.0,
@@ -141,7 +139,6 @@ pub fn player() -> Player {
         volume: 0.7,
         can_next: true,
         can_previous: true,
-        premium: Some(false),
         ..Player::default()
     }
 }
@@ -154,8 +151,8 @@ pub fn session() -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spotify::{
-        bridge::decode,
+    use crate::music::{
+        command::decode,
         model::{Collection, Home, Library, Me, SearchResults},
     };
 
@@ -164,7 +161,7 @@ mod tests {
         let home: Home = decode(&Command::Home, answer(&Command::Home).unwrap()).unwrap();
         assert!(!home.sections.is_empty());
         let found: SearchResults =
-            decode(&Command::Home, answer(&Command::Search("radiohead".into())).unwrap()).unwrap();
+            decode(&Command::Home, answer(&Command::Search("kites".into())).unwrap()).unwrap();
         assert!(!found.is_empty());
         let none: SearchResults =
             decode(&Command::Home, answer(&Command::Search("nothing at all".into())).unwrap()).unwrap();

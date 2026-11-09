@@ -19,12 +19,11 @@ none, remove this section.
 
 ## How to Test
 
-The tests and checks you ran, and how to reproduce them. Say what was not tested (a real Spotify account, a
+The tests and checks you ran, and how to reproduce them. Say what was not tested (a real NetEase Cloud Music account, a
 platform).
 
 ## Checklist
 
-- [ ] The title is `<area>: <What the change does>` (see "Commits and pull requests" in CONTRIBUTING.md).
+- [ ] The title is `<area>: <What the change does>` (see “提交规范” in CONTRIBUTING.md).
 - [ ] `nsh check`, `nsh build` and `nsh test` pass.
-- [ ] Changes to the bridge: `node --test src/bridge/tests/` passes and `node src/bridge/gen-source.mjs --check` is clean.
 - [ ] I reviewed the changes, including any AI-generated code.

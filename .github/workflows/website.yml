@@ -1,5 +1,5 @@
 # Builds the website (website/, Astro with Bun) and publishes it to GitHub Pages, a project site at
-# https://huacnlee.github.io/spotish/ (astro.config.mjs sets that `site` and `base`). It runs when a push to main
+# https://duskriver.github.io/nsh-music/ (astro.config.mjs sets that `site` and `base`). It runs when a push to main
 # changes the site, and by hand. The site serves install.sh and install.ps1, so a change to them goes out with it.
 # The repository's Pages source must be "GitHub Actions" (Settings → Pages).
 name: Website

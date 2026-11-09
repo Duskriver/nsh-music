@@ -1,8 +1,5 @@
-//! What the engine hands TSX: the bridge's answers (items, tracks, pages of
-//! them), the player's state and the session's health. Each type decodes from
-//! the bridge's JSON (serde) and crosses to TSX as a typed object
-//! (`JsObject`), so a shape that drifts fails here, as `E_SHAPE`, not in a
-//! screen.
+//! Typed data, playback state and session health shared by Rust and TSX.
+//! Data responses are decoded before crossing into TSX as `JsObject` values.
 
 use std::fmt;
 
@@ -13,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Item {
-    /// The Spotify URI (`spotify:playlist:…`).
+    /// The NetEase Cloud Music URI (`netease:playlist:…`).
     pub uri: String,
     /// `playlist`, `album`, `artist`, `show`, `collection` or `track`.
     pub kind: String,
@@ -36,7 +33,7 @@ impl Item {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Track {
-    /// The track's URI (`spotify:track:…`).
+    /// The track's URI (`netease:track:…`).
     pub uri: String,
     /// Its row's id in the list (empty in search results).
     pub uid: String,
@@ -171,9 +168,9 @@ pub struct CoverColor {
 pub struct Lyrics {
     /// Whether each line has its time (else they are plain words).
     pub synced: bool,
-    /// The lines in order; none when Spotify has no lyrics for the track.
+    /// The lines in order; none when lyrics are unavailable.
     pub lines: Vec<LyricLine>,
-    /// Who provides them (shown under them, as Spotify does), or empty.
+    /// Who provides them, or empty.
     pub provider: String,
 }
 
@@ -201,7 +198,7 @@ pub enum Repeat {
 }
 
 impl Repeat {
-    /// The bridge's name for it.
+    /// The serialized name.
     pub fn as_str(self) -> &'static str {
         match self {
             Repeat::Off => "off",
@@ -211,8 +208,7 @@ impl Repeat {
     }
 }
 
-/// The player's state, as the web player's own controls show it (one object
-/// per change).
+/// The player's state (one object per change).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Player {
@@ -224,7 +220,7 @@ pub struct Player {
     pub album: String,
     /// The album art URL.
     pub artwork: String,
-    /// The track's URI (`spotify:track:…`).
+    /// The track's URI (`netease:track:…`).
     pub track_uri: String,
     /// The path of the context playing (`/playlist/…`), for linking to it.
     pub context_href: String,
@@ -255,15 +251,10 @@ pub struct Player {
     pub can_next: bool,
     /// Whether there is a previous track.
     pub can_previous: bool,
-    /// Whether an ad is playing.
-    pub ad: bool,
-    /// Whether the account is Premium (free accounts hear ads); null while
-    /// unknown.
-    pub premium: Option<bool>,
 }
 
 impl Player {
-    /// Whether a track (or an ad) is loaded in the player.
+    /// Whether a track is loaded in the player.
     pub fn has_track(&self) -> bool {
         !self.title.is_empty()
     }
@@ -272,12 +263,12 @@ impl Player {
 /// Where the session is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
 pub enum HealthStatus {
-    /// The browser is starting, or the player loading in it.
+    /// The player is starting.
     #[default]
     Starting,
     /// The player runs; data and controls work.
     Ready,
-    /// The sign-in window is open.
+    /// QR sign-in is in progress.
     SigningIn,
     /// Something keeps the player from running; `error` says what.
     Failed,
@@ -291,18 +282,9 @@ pub enum ErrorCode {
     #[default]
     #[prop(rename = "E_NOT_READY")]
     NotReady,
-    /// No Spotify account is signed in.
+    /// No NetEase Cloud Music account is signed in.
     #[prop(rename = "E_SIGNED_OUT")]
     SignedOut,
-    /// Another browser process holds Spotish's profile.
-    #[prop(rename = "E_PROFILE_IN_USE")]
-    ProfileInUse,
-    /// No Chromium-family browser is installed.
-    #[prop(rename = "E_NO_BROWSER")]
-    NoBrowser,
-    /// The browser has no Widevine component, so it cannot play.
-    #[prop(rename = "E_NO_WIDEVINE")]
-    NoWidevine,
     /// The player did not answer in time.
     #[prop(rename = "E_TIMEOUT")]
     Timeout,
@@ -312,34 +294,23 @@ pub enum ErrorCode {
     /// The control is disabled right now.
     #[prop(rename = "E_DISABLED")]
     Disabled,
-    /// An ad is playing, and the control waits for it to end.
-    #[prop(rename = "E_AD")]
-    Ad,
     /// The player answered in a shape the app does not know.
     #[prop(rename = "E_SHAPE")]
     Shape,
-    /// The player does not know the query the app relies on.
-    #[prop(rename = "E_UNKNOWN_QUERY")]
-    UnknownQuery,
-    /// Anything else (a bug, the browser went away).
+    /// An internal engine error.
     #[prop(rename = "E_INTERNAL")]
     Internal,
 }
 
 impl ErrorCode {
     /// Every code, for parsing.
-    pub const ALL: [ErrorCode; 12] = [
+    pub const ALL: [ErrorCode; 7] = [
         ErrorCode::NotReady,
         ErrorCode::SignedOut,
-        ErrorCode::ProfileInUse,
-        ErrorCode::NoBrowser,
-        ErrorCode::NoWidevine,
         ErrorCode::Timeout,
         ErrorCode::NotFound,
         ErrorCode::Disabled,
-        ErrorCode::Ad,
         ErrorCode::Shape,
-        ErrorCode::UnknownQuery,
         ErrorCode::Internal,
     ];
 
@@ -348,15 +319,10 @@ impl ErrorCode {
         match self {
             ErrorCode::NotReady => "E_NOT_READY",
             ErrorCode::SignedOut => "E_SIGNED_OUT",
-            ErrorCode::ProfileInUse => "E_PROFILE_IN_USE",
-            ErrorCode::NoBrowser => "E_NO_BROWSER",
-            ErrorCode::NoWidevine => "E_NO_WIDEVINE",
             ErrorCode::Timeout => "E_TIMEOUT",
             ErrorCode::NotFound => "E_NOT_FOUND",
             ErrorCode::Disabled => "E_DISABLED",
-            ErrorCode::Ad => "E_AD",
             ErrorCode::Shape => "E_SHAPE",
-            ErrorCode::UnknownQuery => "E_UNKNOWN_QUERY",
             ErrorCode::Internal => "E_INTERNAL",
         }
     }
@@ -383,7 +349,7 @@ impl EngineError {
         EngineError { code, message: message.into() }
     }
 
-    /// Reads `"E_CODE: message"` (a bridge's error, or an exception's text,
+    /// Reads `"E_CODE: message"` (an engine error or exception,
     /// maybe prefixed `Error: `). Text with no known code is `E_INTERNAL`;
     /// an unknown `E_…` code is kept, under `E_INTERNAL`, in the message.
     pub fn parse(text: &str) -> EngineError {
@@ -452,7 +418,7 @@ impl Health {
             prompt: String::new(),
         }
     }
-    /// The sign-in window is open.
+    /// QR sign-in is in progress.
     pub fn signing_in() -> Health {
         Health {
             status: HealthStatus::SigningIn,
@@ -509,13 +475,9 @@ mod tests {
 
     #[test]
     fn parses_coded_messages() {
-        let e = EngineError::parse("E_AD: an ad is playing");
-        assert_eq!(e, EngineError::new(ErrorCode::Ad, "an ad is playing"));
-        assert_eq!(e.to_string(), "E_AD: an ad is playing");
-        // An exception's description: `Error: ` and the stack go.
-        let e = EngineError::parse("Error: E_DISABLED: next is disabled\n    at controls.next (bridge.js:10)");
+        let e = EngineError::parse("Error: E_DISABLED: next is disabled\n    at controls.next (app.js:10)");
         assert_eq!(e, EngineError::new(ErrorCode::Disabled, "next is disabled"));
-        let e = EngineError::parse("Uncaught Error: E_NOT_FOUND: no row for spotify:track:x");
+        let e = EngineError::parse("Uncaught Error: E_NOT_FOUND: no row for netease:track:x");
         assert_eq!(e.code, ErrorCode::NotFound);
         // Uncoded text is internal, kept whole.
         let e = EngineError::parse("TypeError: x is undefined");

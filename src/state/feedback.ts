@@ -14,7 +14,6 @@ export const MESSAGES = {
   likeFailed: "无法更新红心歌单，请重试",
   signInFailed: "无法打开网易云登录二维码，请重试",
   retryFailed: "网易云服务不可用，请退出后重试",
-  freeShuffles: "当前账号播放受限，开通黑胶 VIP 可畅听所有歌曲",
 } as const;
 
 export type MessageId = keyof typeof MESSAGES;
@@ -82,7 +81,7 @@ export function announce(text: string, action?: ToastAction): void {
 /** Logs a failure's details and shows the message `id` for it. */
 export function report(id: MessageId, error: unknown, action?: ToastAction): BackendError {
   const parsed = errorOf(error);
-  console.warn(`spotish: ${id}: ${parsed.code}: ${parsed.message}`);
+  console.warn(`nsh-music: ${id}: ${parsed.code}: ${parsed.message}`);
   if (parsed.message && parsed.message.length > 0 && parsed.message !== parsed.code) {
     announce(parsed.message, action);
   } else {

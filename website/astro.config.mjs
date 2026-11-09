@@ -1,7 +1,7 @@
 import { defineConfig } from 'astro/config';
 export default defineConfig({
-  site: process.env.SITE_URL ?? 'https://huacnlee.github.io',
-  base: process.env.BASE_PATH ?? '/spotish',
+  site: process.env.SITE_URL ?? 'https://duskriver.github.io',
+  base: process.env.BASE_PATH ?? '/nsh-music',
   trailingSlash: 'always',
   devToolbar: { enabled: false },
   // The site's own tsconfig, always: left to look, Vite also finds the app's one directory up, which extends

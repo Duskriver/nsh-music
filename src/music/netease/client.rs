@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::crypto::eapi_encrypt;
-use crate::spotify::model::{
+use crate::music::model::{
     Collection, ErrorCode, EngineError, Header, Home, Item, Library, LyricLine, Lyrics, Me,
     SearchResults, Section, Track,
 };
@@ -22,6 +22,10 @@ const EAPI: &str = "https://interfacepc.music.163.com";
 const UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
 const EAPI_UA: &str = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
+// Keep cookie names such as MUSIC_U and __csrf intact, as encodeURIComponent does.
+const EAPI_COOKIE_ENCODING: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~')
+    .remove(b'*').remove(b'\'').remove(b'(').remove(b')');
 
 /// A stored NetEase user profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,10 +98,25 @@ fn artwork_url(raw: Option<&str>) -> String {
     }
 }
 
+fn profile_from_response(response: &Value) -> Option<NetEaseProfile> {
+    let profile = response.get("profile")?;
+    let user_id = profile.get("userId")?;
+    let id = match user_id {
+        Value::String(id) if !id.is_empty() => id.clone(),
+        Value::Number(id) if id.is_u64() => id.to_string(),
+        _ => return None,
+    };
+    Some(NetEaseProfile {
+        id,
+        name: profile.get("nickname").and_then(Value::as_str).unwrap_or("NetEase User").to_string(),
+        avatar_url: artwork_url(profile.get("avatarUrl").and_then(Value::as_str)),
+    })
+}
+
 impl NetEaseClient {
     /// Creates a client and loads existing session cookies from disk if present.
     pub fn new(data_dir: &Path) -> Self {
-        let session_file = data_dir.join("netease-session.json");
+        let session_file = data_dir.join(crate::music::paths::SESSION_FILE);
         let mut device_id = String::new();
         let mut cookies = HashMap::new();
         let mut profile = None;
@@ -142,14 +161,11 @@ impl NetEaseClient {
 
     /// The signed-in user's profile, if available.
     pub fn profile(&self) -> Option<NetEaseProfile> {
+        if !self.is_signed_in() {
+            return None;
+        }
         let cached = self.profile.lock().unwrap().clone();
-        if cached.is_some() {
-            return cached;
-        }
-        if self.is_signed_in() {
-            return self.refresh_profile().ok().flatten();
-        }
-        None
+        cached.or_else(|| self.refresh_profile().ok().flatten())
     }
 
     /// Clears the login session and removes the stored session file.
@@ -174,7 +190,15 @@ impl NetEaseClient {
             profile,
         };
         if let Ok(bytes) = serde_json::to_vec_pretty(&stored) {
-            let _ = fs::write(&self.session_file, bytes);
+            let saved = self
+                .session_file
+                .parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .map_or(Ok(()), fs::create_dir_all)
+                .and_then(|()| fs::write(&self.session_file, bytes));
+            if let Err(error) = saved {
+                log::warn!("could not save the NetEase session: {error}");
+            }
         }
     }
 
@@ -203,12 +227,10 @@ impl NetEaseClient {
         }
     }
 
-    fn accept_response_cookies(&self, resp: &ureq::http::Response<ureq::Body>) {
-        for (header_name, header_value) in resp.headers() {
-            if header_name.as_str().eq_ignore_ascii_case("set-cookie") {
-                if let Ok(cookie_str) = header_value.to_str() {
-                    self.save_cookie_str(cookie_str);
-                }
+    fn accept_response_cookies(&self, headers: &ureq::http::HeaderMap) {
+        for value in headers.get_all(ureq::http::header::SET_COOKIE) {
+            if let Ok(cookie) = value.to_str() {
+                self.save_cookie_str(cookie);
             }
         }
     }
@@ -220,7 +242,32 @@ impl NetEaseClient {
         params: &HashMap<&str, Value>,
         is_eapi: bool,
     ) -> Result<Value, EngineError> {
-        let cookies_snapshot = self.cookies.lock().unwrap().clone();
+        let response = self.request_raw(path, params, is_eapi)?;
+        let code = response.get("code").and_then(Value::as_i64).unwrap_or(200);
+        if matches!(code, 301 | 302 | 401) {
+            if self.is_signed_in() {
+                // Content can be restricted even while the account is signed in.
+                if !matches!(self.refresh_profile(), Ok(None)) {
+                    log::warn!("NetEase {path} returned code {code}; keeping the login session");
+                    return Err(EngineError::new(ErrorCode::Internal, format!("网易云接口拒绝了请求（{code}）")));
+                }
+                log::warn!("NetEase cleared the login session after {path} returned code {code} and the account check confirmed sign-out");
+            }
+            return Err(EngineError::new(ErrorCode::SignedOut, "网易云登录已失效，请重新登录"));
+        }
+        Ok(response)
+    }
+
+    fn request_raw(
+        &self,
+        path: &str,
+        params: &HashMap<&str, Value>,
+        is_eapi: bool,
+    ) -> Result<Value, EngineError> {
+        let mut cookies_snapshot = self.cookies.lock().unwrap().clone();
+        if cookies_snapshot.contains_key("MUSIC_U") {
+            cookies_snapshot.remove("MUSIC_A");
+        }
 
         let resp = if is_eapi {
             let now_m = now_millis();
@@ -261,8 +308,8 @@ impl NetEaseClient {
                     }
                     cookie_header.push_str(&format!(
                         "{}={}",
-                        percent_encoding::utf8_percent_encode(k.as_str(), percent_encoding::NON_ALPHANUMERIC),
-                        percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC)
+                        percent_encoding::utf8_percent_encode(k.as_str(), EAPI_COOKIE_ENCODING),
+                        percent_encoding::utf8_percent_encode(s, EAPI_COOKIE_ENCODING)
                     ));
                 }
             }
@@ -319,23 +366,15 @@ impl NetEaseClient {
                 .map_err(|e| EngineError::new(ErrorCode::Internal, format!("NetEase Web API network error: {e}")))?
         };
 
-        self.accept_response_cookies(&resp);
+        self.accept_response_cookies(resp.headers());
 
         let body_bytes = resp
             .into_body()
             .read_to_vec()
             .map_err(|e| EngineError::new(ErrorCode::Shape, format!("failed to read response: {e}")))?;
 
-        let json_body: Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("invalid JSON from NetEase: {e}")))?;
-
-        let code = json_body.get("code").and_then(|v| v.as_i64()).unwrap_or(200);
-        if code == 301 || code == 302 || code == 401 {
-            self.clear_session();
-            return Err(EngineError::new(ErrorCode::SignedOut, "网易云登录已失效，请重新登录"));
-        }
-
-        Ok(json_body)
+        serde_json::from_slice(&body_bytes)
+            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("invalid JSON from NetEase: {e}")))
     }
 
     /// Starts a QR code login flow: returns `(unikey, qr_image_data_uri)`.
@@ -374,57 +413,63 @@ impl NetEaseClient {
             800 => Ok(QrPollResult::Expired),
             801 => Ok(QrPollResult::WaitingScan),
             802 => Ok(QrPollResult::ScannedWaitingConfirm),
-            803 => {
-                // NetEase returns session credentials in the `cookie` field of the 803 JSON response
-                if let Some(cookie_str) = res.get("cookie").and_then(|v| v.as_str()) {
-                    self.save_cookie_str(cookie_str);
-                } else if let Some(cookie_str) = res.get("cookies").and_then(|v| v.as_str()) {
-                    self.save_cookie_str(cookie_str);
-                }
-                // If profile is already included in 803 response, save it directly
-                if let Some(profile_obj) = res.get("profile").and_then(|v| v.as_object()) {
-                    let id = profile_obj.get("userId").map(|v| v.to_string()).unwrap_or_default();
-                    let name = profile_obj
-                        .get("nickname")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("NetEase User")
-                        .to_string();
-                    let avatar_url = artwork_url(profile_obj.get("avatarUrl").and_then(|v| v.as_str()));
-                    let p = NetEaseProfile { id, name, avatar_url };
-                    let mut lock = self.profile.lock().unwrap();
-                    *lock = Some(p);
-                    drop(lock);
-                    self.persist_session();
-                } else {
-                    let _ = self.refresh_profile();
-                }
-                Ok(QrPollResult::Success)
-            }
+            803 => self.finish_qr_login(&res),
             _ => Ok(QrPollResult::WaitingScan),
         }
     }
 
+    fn finish_qr_login(&self, response: &Value) -> Result<QrPollResult, EngineError> {
+        for field in ["cookie", "cookies"] {
+            if let Some(cookie) = response.get(field).and_then(Value::as_str) {
+                self.save_cookie_str(cookie);
+            }
+        }
+        if !self.is_signed_in() {
+            return Err(EngineError::new(ErrorCode::SignedOut, "网易云未返回登录凭据，请重新扫码。"));
+        }
+
+        if let Some(profile) = profile_from_response(response) {
+            *self.profile.lock().unwrap() = Some(profile);
+            self.persist_session();
+        } else if !matches!(self.refresh_profile(), Ok(Some(_))) {
+            self.clear_session();
+            return Err(EngineError::new(ErrorCode::SignedOut, "无法验证网易云账号，请重新扫码。"));
+        }
+        Ok(QrPollResult::Success)
+    }
+
     /// Refreshes the user profile from `/api/nuser/account/get`.
     pub fn refresh_profile(&self) -> Result<Option<NetEaseProfile>, EngineError> {
-        let res = self
-            .request("/api/nuser/account/get", &HashMap::new(), false)
-            .or_else(|_| self.request("/api/nuser/account/get", &HashMap::new(), true))?;
-        if let Some(profile_obj) = res.get("profile").and_then(|v| v.as_object()) {
-            let id = profile_obj.get("userId").map(|v| v.to_string()).unwrap_or_default();
-            let name = profile_obj
-                .get("nickname")
-                .and_then(|v| v.as_str())
-                .unwrap_or("NetEase User")
-                .to_string();
-            let avatar_url = artwork_url(profile_obj.get("avatarUrl").and_then(|v| v.as_str()));
-            let p = NetEaseProfile { id, name, avatar_url };
-            let mut lock = self.profile.lock().unwrap();
-            *lock = Some(p.clone());
-            drop(lock);
-            self.persist_session();
-            return Ok(Some(p));
+        if !self.is_signed_in() {
+            return Ok(None);
         }
-        Ok(None)
+        let web = self.request_profile(false);
+        let profile = match web {
+            Ok(Some(profile)) => Some(profile),
+            web => match self.request_profile(true)? {
+                Some(profile) => Some(profile),
+                None => web?,
+            },
+        };
+        if let Some(profile) = &profile {
+            *self.profile.lock().unwrap() = Some(profile.clone());
+            self.persist_session();
+        } else {
+            self.clear_session();
+        }
+        Ok(profile)
+    }
+
+    fn request_profile(&self, is_eapi: bool) -> Result<Option<NetEaseProfile>, EngineError> {
+        let response = self.request_raw("/api/nuser/account/get", &HashMap::new(), is_eapi)?;
+        match response.get("code").and_then(Value::as_i64) {
+            Some(301 | 302 | 401) => Ok(None),
+            Some(200) if response.get("profile") == Some(&Value::Null) => Ok(None),
+            Some(200) => profile_from_response(&response).map(Some).ok_or_else(|| {
+                EngineError::new(ErrorCode::Shape, "网易云未返回有效的账号资料")
+            }),
+            code => Err(EngineError::new(ErrorCode::Internal, format!("NetEase account check returned code {code:?}"))),
+        }
     }
 
     /// Fetches song details by batch from `/api/v3/song/detail`.
@@ -488,7 +533,7 @@ impl NetEaseClient {
                     let album_uri = if album_id.is_empty() {
                         String::new()
                     } else {
-                        format!("spotify:album:{album_id}")
+                        format!("netease:album:{album_id}")
                     };
                     let image = artwork_url(album_obj.and_then(|a| a.get("picUrl").and_then(|p| p.as_str())));
 
@@ -506,7 +551,7 @@ impl NetEaseClient {
                     };
 
                     tracks.push(Track {
-                        uri: format!("spotify:track:{id_str}"),
+                        uri: format!("netease:track:{id_str}"),
                         uid: id_str,
                         name,
                         artists,
@@ -539,21 +584,21 @@ impl NetEaseClient {
         if profile.is_some() {
             let mut items = Vec::new();
             items.push(Item {
-                uri: "spotify:playlist:daily".to_string(),
+                uri: "netease:playlist:daily".to_string(),
                 kind: "playlist".to_string(),
                 name: "每日推荐".to_string(),
                 subtitle: "每天 6:00 更新 · 专属推荐".to_string(),
                 image: "https://p1.music.126.net/19b5c3bfd5cb8d2db82c5f1566a7b3db/109951163351984240.jpg?param=300y300".to_string(),
             });
             items.push(Item {
-                uri: "spotify:collection:tracks".to_string(),
+                uri: "netease:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: "红心歌单".to_string(),
                 image: "https://p1.music.126.net/vC_Hn86qfS-L_eS1y9k81g==/109951167878895057.jpg?param=300y300".to_string(),
             });
             items.push(Item {
-                uri: "spotify:playlist:3136952023".to_string(),
+                uri: "netease:playlist:3136952023".to_string(),
                 kind: "playlist".to_string(),
                 name: "私人雷达".to_string(),
                 subtitle: "根据你的听歌偏好生成".to_string(),
@@ -584,7 +629,7 @@ impl NetEaseClient {
                             "推荐歌单".to_string()
                         };
                         Some(Item {
-                            uri: format!("spotify:playlist:{id}"),
+                            uri: format!("netease:playlist:{id}"),
                             kind: "playlist".to_string(),
                             name,
                             subtitle,
@@ -618,7 +663,7 @@ impl NetEaseClient {
                             .unwrap_or("官方榜单")
                             .to_string();
                         Some(Item {
-                            uri: format!("spotify:playlist:{id}"),
+                            uri: format!("netease:playlist:{id}"),
                             kind: "playlist".to_string(),
                             name,
                             subtitle,
@@ -682,7 +727,7 @@ impl NetEaseClient {
                         let name = a.get("name")?.as_str()?.to_string();
                         let image = artwork_url(a.get("picUrl").or_else(|| a.get("img1v1Url")).and_then(|u| u.as_str()));
                         Some(Item {
-                            uri: format!("spotify:artist:{id}"),
+                            uri: format!("netease:artist:{id}"),
                             kind: "artist".to_string(),
                             name,
                             subtitle: "歌手".to_string(),
@@ -714,7 +759,7 @@ impl NetEaseClient {
                             .unwrap_or("未知歌手");
                         let image = artwork_url(a.get("picUrl").and_then(|u| u.as_str()));
                         Some(Item {
-                            uri: format!("spotify:album:{id}"),
+                            uri: format!("netease:album:{id}"),
                             kind: "album".to_string(),
                             name,
                             subtitle: artist_name.to_string(),
@@ -746,7 +791,7 @@ impl NetEaseClient {
                             .unwrap_or("网易云歌单");
                         let image = artwork_url(p.get("coverImgUrl").and_then(|u| u.as_str()));
                         Some(Item {
-                            uri: format!("spotify:playlist:{id}"),
+                            uri: format!("netease:playlist:{id}"),
                             kind: "playlist".to_string(),
                             name,
                             subtitle: format!("by {owner}"),
@@ -767,13 +812,13 @@ impl NetEaseClient {
 
     /// Fetches a playlist or daily songs as a Collection.
     pub fn playlist(&self, id_or_uri: &str) -> Result<Collection, EngineError> {
-        let uri = if id_or_uri.starts_with("spotify:") {
+        let uri = if id_or_uri.starts_with("netease:") {
             id_or_uri.to_string()
         } else {
-            format!("spotify:playlist:{id_or_uri}")
+            format!("netease:playlist:{id_or_uri}")
         };
 
-        if uri == "spotify:playlist:daily" {
+        if uri == "netease:playlist:daily" {
             // Daily recommend songs
             if !self.is_signed_in() {
                 return Err(EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"));
@@ -793,7 +838,7 @@ impl NetEaseClient {
 
             return Ok(Collection {
                 header: Header {
-                    uri: "spotify:playlist:daily".to_string(),
+                    uri: "netease:playlist:daily".to_string(),
                     kind: "playlist".to_string(),
                     name: "每日推荐".to_string(),
                     subtitle: "网易云音乐".to_string(),
@@ -806,7 +851,7 @@ impl NetEaseClient {
             });
         }
 
-        let raw_id = uri.strip_prefix("spotify:playlist:").unwrap_or(&uri);
+        let raw_id = uri.strip_prefix("netease:playlist:").unwrap_or(&uri);
         let mut params = HashMap::new();
         params.insert("id", json!(raw_id));
         params.insert("n", json!(1000));
@@ -849,7 +894,7 @@ impl NetEaseClient {
 
     /// Fetches an album by id.
     pub fn album(&self, id_or_uri: &str) -> Result<Collection, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("spotify:album:").unwrap_or(id_or_uri);
+        let raw_id = id_or_uri.strip_prefix("netease:album:").unwrap_or(id_or_uri);
         let path = format!("/api/v1/album/{raw_id}");
         let res = self.request(&path, &HashMap::new(), false)?;
         let a = res
@@ -881,7 +926,7 @@ impl NetEaseClient {
 
         Ok(Collection {
             header: Header {
-                uri: format!("spotify:album:{raw_id}"),
+                uri: format!("netease:album:{raw_id}"),
                 kind: "album".to_string(),
                 name,
                 subtitle,
@@ -896,7 +941,7 @@ impl NetEaseClient {
 
     /// Fetches an artist by id.
     pub fn artist(&self, id_or_uri: &str) -> Result<Collection, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("spotify:artist:").unwrap_or(id_or_uri);
+        let raw_id = id_or_uri.strip_prefix("netease:artist:").unwrap_or(id_or_uri);
         let artist_path = format!("/api/v1/artist/{raw_id}");
         let albums_path = format!("/api/artist/albums/{raw_id}");
 
@@ -929,7 +974,7 @@ impl NetEaseClient {
                         let a_name = a.get("name")?.as_str()?.to_string();
                         let a_img = artwork_url(a.get("picUrl").and_then(|u| u.as_str()));
                         Some(Item {
-                            uri: format!("spotify:album:{id}"),
+                            uri: format!("netease:album:{id}"),
                             kind: "album".to_string(),
                             name: a_name,
                             subtitle: "专辑".to_string(),
@@ -942,7 +987,7 @@ impl NetEaseClient {
 
         Ok(Collection {
             header: Header {
-                uri: format!("spotify:artist:{raw_id}"),
+                uri: format!("netease:artist:{raw_id}"),
                 kind: "artist".to_string(),
                 name,
                 subtitle: "歌手".to_string(),
@@ -975,7 +1020,7 @@ impl NetEaseClient {
 
         Ok(Collection {
             header: Header {
-                uri: "spotify:collection:tracks".to_string(),
+                uri: "netease:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: profile.name,
@@ -997,7 +1042,7 @@ impl NetEaseClient {
         let mut items = vec![
             // 1. Liked Songs
             Item {
-                uri: "spotify:collection:tracks".to_string(),
+                uri: "netease:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: "心动精选".to_string(),
@@ -1005,7 +1050,7 @@ impl NetEaseClient {
             },
             // 2. Daily Recommend
             Item {
-                uri: "spotify:playlist:daily".to_string(),
+                uri: "netease:playlist:daily".to_string(),
                 kind: "playlist".to_string(),
                 name: "每日推荐".to_string(),
                 subtitle: "每天更新".to_string(),
@@ -1033,7 +1078,7 @@ impl NetEaseClient {
                         .unwrap_or("");
                     let image = artwork_url(p.get("coverImgUrl").and_then(|v| v.as_str()));
                     items.push(Item {
-                        uri: format!("spotify:playlist:{id}"),
+                        uri: format!("netease:playlist:{id}"),
                         kind: "playlist".to_string(),
                         name,
                         subtitle: format!("{count} 首 · by {owner}"),
@@ -1050,7 +1095,6 @@ impl NetEaseClient {
     pub fn me(&self) -> Result<Me, EngineError> {
         let profile = self
             .profile()
-            .or_else(|| self.refresh_profile().ok().flatten())
             .ok_or_else(|| {
                 EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐")
             })?;
@@ -1065,7 +1109,7 @@ impl NetEaseClient {
 
     /// Fetches lyrics for a track ID.
     pub fn lyrics(&self, id_or_uri: &str) -> Result<Lyrics, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("spotify:track:").unwrap_or(id_or_uri);
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
         let mut params = HashMap::new();
         params.insert("id", json!(raw_id));
         params.insert("lv", json!(1));
@@ -1135,7 +1179,7 @@ impl NetEaseClient {
 
     /// Fetches audio stream URL (MP3/FLAC) for a track.
     pub fn stream_url(&self, id_or_uri: &str) -> Result<String, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("spotify:track:").unwrap_or(id_or_uri);
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
         let id_num = raw_id.parse::<u64>().map_err(|_| {
             EngineError::new(ErrorCode::NotFound, format!("无效的歌曲 ID: {raw_id}"))
         })?;
@@ -1199,7 +1243,7 @@ impl NetEaseClient {
         if !self.is_signed_in() {
             return Err(EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"));
         }
-        let raw_id = id_or_uri.strip_prefix("spotify:track:").unwrap_or(id_or_uri);
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
         let mut params = HashMap::new();
         params.insert("alg", json!("itembased"));
         params.insert("trackId", json!(raw_id));
@@ -1208,5 +1252,36 @@ impl NetEaseClient {
 
         self.request("/api/radio/like", &params, true)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ureq::http::{HeaderMap, HeaderValue, header::SET_COOKIE};
+
+    #[test]
+    fn qr_confirmation_requires_credentials_and_accepts_multiple_cookie_headers() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-qr-{}", std::process::id()));
+        fs::create_dir(&data).unwrap();
+        let client = NetEaseClient::new(&data);
+        let confirmed = json!({ "code": 803, "profile": { "userId": "42", "nickname": "Fixture" } });
+        let mut headers = HeaderMap::new();
+        headers.append(SET_COOKIE, HeaderValue::from_static("NMTID=device; Path=/"));
+        client.accept_response_cookies(&headers);
+
+        assert_eq!(client.finish_qr_login(&confirmed).unwrap_err().code, ErrorCode::SignedOut);
+        assert!(client.profile().is_none());
+
+        headers.append(SET_COOKIE, HeaderValue::from_static("MUSIC_U=fixture; Path=/"));
+        headers.append(SET_COOKIE, HeaderValue::from_static("__csrf=fixture; Path=/"));
+        client.accept_response_cookies(&headers);
+        assert_eq!(client.finish_qr_login(&confirmed), Ok(QrPollResult::Success));
+        let restored = NetEaseClient::new(&data);
+        assert!(restored.is_signed_in());
+        assert_eq!(restored.profile().unwrap().id, "42");
+
+        client.clear_session();
+        fs::remove_dir(data).unwrap();
     }
 }

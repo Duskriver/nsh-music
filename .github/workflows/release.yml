@@ -1,4 +1,4 @@
-# Packages Spotish for macOS, Linux and Windows. A tag `vX.Y.Z` publishes them as a GitHub release; running it by
+# Packages nsh-music for macOS, Linux and Windows. A tag `vX.Y.Z` publishes them as a GitHub release; running it by
 # hand only builds them (workflow artifacts). The installers' asset names carry no version, so
 # `releases/latest/download/<asset>`, which install.sh and install.ps1 use, always resolves. The versioned archives
 # and `latest.json` beside them are what the app's updater (`nsh.json` "updater") fetches.
@@ -29,9 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: linux, os: ubuntu-24.04, asset: spotish-linux-x86_64.tar.gz, installer: website/public/install.sh }
-          - { target: macos, os: macos-15, asset: spotish-macos-arm64.zip, installer: website/public/install.sh }
-          - { target: windows, os: windows-latest, asset: spotish-windows-x86_64.zip, installer: website/public/install.ps1 }
+          - { target: linux, os: ubuntu-24.04, asset: nsh-music-linux-x86_64.tar.gz, installer: website/public/install.sh }
+          - { target: macos, os: macos-15, asset: nsh-music-macos-arm64.zip, installer: website/public/install.sh }
+          - { target: windows, os: windows-latest, asset: nsh-music-windows-x86_64.zip, installer: website/public/install.ps1 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # Spotish follows NSH's main: the nightly CLI, as in CI (https://nsh.dev/docs/installation).
+      # nsh-music follows NSH's main: the nightly CLI, as in CI (https://nsh.dev/docs/installation).
       - name: Install the NSH CLI (nightly)
         if: runner.os != 'Windows'
         run: |
@@ -92,9 +92,9 @@ jobs:
           ls -l "$out"
           # The installers' archive, and the versioned one for the updater.
           case "$TARGET" in
-            linux) mv "$out/Spotish.tar.gz" "assets/$ASSET"; mv "$out"/Spotish-*.tar.gz assets/ ;;
-            windows) mv "$out/Spotish.zip" "assets/$ASSET"; mv "$out"/Spotish-*.zip assets/ ;;
-            macos) ditto -c -k --keepParent "$out/Spotish.app" "assets/$ASSET"; mv "$out"/Spotish-*.tar.gz assets/ ;;
+            linux) mv "$out/nsh-music.tar.gz" "assets/$ASSET"; mv "$out"/nsh-music-*.tar.gz assets/ ;;
+            windows) mv "$out/nsh-music.zip" "assets/$ASSET"; mv "$out"/nsh-music-*.zip assets/ ;;
+            macos) ditto -c -k --keepParent "$out/nsh-music.app" "assets/$ASSET"; mv "$out"/nsh-music-*.tar.gz assets/ ;;
           esac
           ls -l assets
 
@@ -103,7 +103,7 @@ jobs:
         env:
           ASSET: ${{ matrix.asset }}
         run: |
-          app="$RUNNER_TEMP/verify/Spotish.app"
+          app="$RUNNER_TEMP/verify/nsh-music.app"
           ditto -x -k "assets/$ASSET" "$RUNNER_TEMP/verify"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           lipo "$app/Contents/MacOS/$executable" -verify_arch arm64
@@ -121,18 +121,18 @@ jobs:
           server=$!
           trap 'kill "$server" 2> /dev/null || true' EXIT
           sleep 2
-          export SPOTISH_BASE_URL=http://127.0.0.1:8765
+          export NSH_MUSIC_BASE_URL=http://127.0.0.1:8765
           case "$RUNNER_OS" in
             Windows)
               powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTALLER"
-              test -f "$LOCALAPPDATA/Programs/Spotish/Spotish.exe" ;;
+              test -f "$LOCALAPPDATA/Programs/nsh-music/nsh-music.exe" ;;
             macOS)
               bash "$INSTALLER"
-              codesign --verify --deep --strict /Applications/Spotish.app ;;
+              codesign --verify --deep --strict /Applications/nsh-music.app ;;
             Linux)
               bash "$INSTALLER"
-              test -x "$HOME/.local/share/spotish/Spotish"
-              test -x "$HOME/.local/bin/spotish"
+              test -x "$HOME/.local/share/nsh-music-app/nshmusic"
+              test -x "$HOME/.local/bin/nsh-music"
               ls "$HOME"/.local/share/applications/*.desktop ;;
           esac
           rm assets/sha256sums
@@ -159,7 +159,7 @@ jobs:
         with:
           path: assets
           merge-multiple: true
-      # Release file names are lowercase (nsh names the updater's archives after the app, Spotish-<version>-...).
+      # Release file names are lowercase (nsh names the updater's archives after the app, nsh-music-<version>-...).
       - name: Lowercase asset names
         run: |
           cd assets
@@ -171,7 +171,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           jq --arg version "$version" '.version = $version' nsh.json > "$RUNNER_TEMP/nsh.json"
           mv "$RUNNER_TEMP/nsh.json" nsh.json
-          nsh update-manifest assets/spotish-"$version"-*.tar.gz assets/spotish-"$version"-*.zip --out assets
+          nsh update-manifest assets/nsh-music-"$version"-*.tar.gz assets/nsh-music-"$version"-*.zip --out assets
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -183,5 +183,5 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" * --clobber
           else
-            gh release create "$GITHUB_REF_NAME" * --verify-tag --generate-notes --title "Spotish $GITHUB_REF_NAME"
+            gh release create "$GITHUB_REF_NAME" * --verify-tag --generate-notes --title "nsh-music $GITHUB_REF_NAME"
           fi

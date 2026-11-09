@@ -23,21 +23,12 @@ function page(route: Route) {
   }
 }
 
-/** Why the session failed, for the user: one sentence they can act on. */
-function unavailableDetail(): string | undefined {
-  const error = health().error;
-  if (error?.code === "E_PROFILE_IN_USE") {
-    return "Spotish's browser profile is in use by another process. Quit the other Spotish and retry.";
-  }
-  return undefined;
-}
-
 export function MainStack(props: { class?: string }) {
   return (
     <View class={`min-h-0 flex-1 ${props.class ?? ""}`}>
       <If
         when={health().status !== "failed"}
-        else={<ErrorState message="Spotify isn't available" detail={unavailableDetail()} onRetry={retry} />}
+        else={<ErrorState message="NetEase Cloud Music is unavailable" detail={health().error?.message} onRetry={retry} />}
       >
         <NavStack state={nav} class="flex-1" testID="main">
           {(route) => page(route)}

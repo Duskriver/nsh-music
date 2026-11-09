@@ -1,6 +1,6 @@
 // Updates: a newer build of the app's TSX (an OTA package, run from the
 // next start) and a newer app (a new binary, for Rust or NSH runtime
-// changes), from the GitHub Releases of huacnlee/spotish (nsh.json
+// changes), from the GitHub Releases of Duskriver/nsh-music (nsh.json
 // "updater"). Quiet: a failed check is logged, and the next check tries
 // again.
 //
@@ -20,7 +20,7 @@
 //   nsh keygen keys/release       # signs packages, in CI
 //   nsh keygen keys/update        # signs latest.json; nsh.json updater.publicKey ← update.pub
 //   nsh certify --root keys/root.secret --key keys/release.pub \
-//     --apps dev.huacnlee.spotish -o keys/release.cert   # renew yearly
+//     --apps io.github.duskriver.nsh-music -o keys/release.cert   # renew yearly
 //   gh secret set NSH_RELEASE_KEY < keys/release.secret
 //   gh secret set NSH_RELEASE_CERT < keys/release.cert
 //   gh secret set NSH_UPDATE_KEY < keys/update.secret
@@ -30,8 +30,8 @@
 //
 // Every release raises `build` in nsh.json (one counter for packages and
 // app builds) and `version` (semver). Then, on a `v*` tag:
-// - TSX only (screens, styles, bridge.js once it ships in the bundle):
-//     nsh publish --key release.secret --cert release.cert -o dist/dev.huacnlee.spotish-<build>.nshpkg
+// - TSX only (screens and styles):
+//     nsh publish --key release.secret --cert release.cert -o dist/io.github.duskriver.nsh-music-<build>.nshpkg
 //     nsh update-manifest --package dist/…nshpkg --notes CHANGES.md --key update.secret -o dist
 //   Publish with the nsh version of the app builds in the field, or set
 //   nsh.json "minRuntime" to the oldest runtime the TSX supports; when the
@@ -79,7 +79,7 @@ export async function checkForUpdates(opts: UpdateOptions): Promise<void> {
     if (pkg) {
       await downloadPackage();
       if (canRestart) {
-        opts.notify(`Spotish ${pkg.version} is ready.`, {
+        opts.notify(`nsh-music ${pkg.version} is ready.`, {
           label: "Restart",
           run: () => void restartToPackage().catch((e: unknown) => console.warn("update: restart failed:", e)),
         });
@@ -89,12 +89,12 @@ export async function checkForUpdates(opts: UpdateOptions): Promise<void> {
     const app = await checkForUpdate();
     if (!app) return;
     if (app.canInstall) {
-      opts.notify(`Spotish ${app.version} is available.`, {
+      opts.notify(`nsh-music ${app.version} is available.`, {
         label: "Update",
         run: () => void installApp(opts),
       });
     } else {
-      opts.notify(`Spotish ${app.version} is available.`, {
+      opts.notify(`nsh-music ${app.version} is available.`, {
         label: "Download",
         run: () => void openUrl(app.url).catch(() => undefined),
       });

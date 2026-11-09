@@ -1,20 +1,18 @@
 // The music's live levels, for visuals that move with it (the shader).
-// Rust (`AudioMeter`, src/audio.rs) records Spotish's own audio stream from
-// the system mixer and analyzes it; this side shares one meter per process
+// Rust (`AudioMeter`, src/audio.rs) analyzes PCM samples from the native player; this side shares one meter per process
 // and hands out an accessor.
 //
 //   const audio = audioLevels();
 //   <Shader uniforms={() => ({ pulse: audio().beat, bass: audio().bass })} />
 //
-// The frame is zero (ZERO_FRAME) where there is nothing to meter: off Linux
-// and macOS 14.2+ for now, off the desktops, on the demo backend (tests),
+// The frame is zero (ZERO_FRAME) where there is nothing to meter: off the desktops, on the demo backend (tests),
 // when the user asks for less motion, while the window is hidden, and while
 // the music is quiet.
 // The meter starts with its first user and stops a few seconds after its
 // last one goes, so it costs nothing while no visual shows.
 
 import { cleanup, createAnimatedValue, host, lifecycle, platform, reduceMotion, signal, type Accessor, type Signal } from "nsh";
-import { AudioMeter, type AudioFrame } from "spotish/native";
+import { AudioMeter, type AudioFrame } from "nsh-music/native";
 
 export type { AudioFrame };
 
@@ -50,8 +48,8 @@ interface Shared {
   unavailable: boolean;
 }
 
-// Survives hot reload: one meter (and one `parec` or tap) per process.
-const SLOT = "__spotishAudio";
+// Survives hot reload: one PCM meter per process.
+const SLOT = "__nshMusicAudio";
 
 function shared(): Shared {
   const g = globalThis as unknown as Record<string, Shared | undefined>;

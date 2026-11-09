@@ -23,12 +23,8 @@ import {
 
 /** How the demo starts. */
 export interface DemoOptions {
-  /** Premium (default false: a free account, which shuffles and hears ads). */
-  premium?: boolean;
   /** Signed in at the start (default true). */
   signedIn?: boolean;
-  /** An ad plays at the start (default false). */
-  ad?: boolean;
   /** Milliseconds until the player is ready (default 30). */
   readyAfter?: number;
   /** Milliseconds each data call takes (default 0). */
@@ -60,15 +56,13 @@ export class DemoBackend implements Backend {
   #ending: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: DemoOptions = {}) {
-    this.#options = { premium: false, signedIn: true, ad: false, readyAfter: 30, latency: 0, ...options };
+    this.#options = { signedIn: true, readyAfter: 30, latency: 0, ...options };
     this.player = () => this.#player();
     this.health = () => this.#health();
     this.signedIn = () => this.#signedIn();
     this.#later(this.#options.readyAfter, () => {
       this.#signedIn.set(this.#options.signedIn);
       this.#health.set({ status: "ready", error: null });
-      this.#update({ premium: this.#premium() });
-      if (this.#options.ad) this.#playAd();
     });
   }
 
@@ -170,20 +164,17 @@ export class DemoBackend implements Backend {
 
   async next(): Promise<void> {
     this.#ready();
-    if (this.#player().ad) throw backendError("E_AD_PLAYING", "an ad is playing");
     this.#advance(1);
   }
 
   async previous(): Promise<void> {
     this.#ready();
-    if (this.#player().ad) throw backendError("E_AD_PLAYING", "an ad is playing");
     if (this.#position() > 3000 || this.#index === 0) this.#update({ positionMs: 0 });
     else this.#advance(-1);
   }
 
   async seek(ms: number): Promise<void> {
     this.#ready();
-    if (this.#player().ad) throw backendError("E_AD_PLAYING", "an ad is playing");
     this.#update({ positionMs: Math.max(0, Math.min(ms, this.#player().durationMs)) });
   }
 
@@ -219,14 +210,8 @@ export class DemoBackend implements Backend {
     if (!found || found.tracks.length === 0) throw backendError("E_NOT_FOUND", `no demo collection ${uri}`);
     this.#queue = found.tracks;
     const at = trackUri ? found.tracks.findIndex((t) => t.uri === trackUri) : -1;
-    if (this.#premium()) {
-      this.#index = Math.max(0, at);
-      this.#load(uri, { shuffle: this.#player().shuffle });
-    } else {
-      // Spotify Free shuffles a playlist rather than playing a chosen track.
-      this.#index = (uri.length * 7) % found.tracks.length;
-      this.#load(uri, { shuffle: true });
-    }
+    this.#index = Math.max(0, at);
+    this.#load(uri, {});
   }
 
   async playTrack(uri: string): Promise<void> {
@@ -247,7 +232,6 @@ export class DemoBackend implements Backend {
       if (this.#health().status !== "signingIn") return;
       this.#signedIn.set(true);
       this.#health.set({ status: "ready", error: null });
-      this.#update({ premium: this.#premium() });
       for (const listener of this.#auth) listener();
     });
   }
@@ -266,14 +250,6 @@ export class DemoBackend implements Backend {
 
   async retry(): Promise<void> {
     this.#health.set({ status: "ready", error: null });
-  }
-
-  setBridge(_source: string): void {}
-
-  // ---- Pretend playback ----
-
-  #premium(): boolean | null {
-    return this.#signedIn() === true ? this.#options.premium : null;
   }
 
   #ready(): void {
@@ -306,12 +282,6 @@ export class DemoBackend implements Backend {
 
   #ended(): void {
     const p = this.#player();
-    if (p.ad) {
-      // The ad is over: what was queued plays.
-      if (this.#queue.length) this.#load(p.contextUri, {});
-      else this.#update({ ...EMPTY_PLAYER, premium: this.#premium(), playing: false });
-      return;
-    }
     if (p.repeat === "track") this.#update({ positionMs: 0 });
     else if (this.#index + 1 < this.#queue.length || p.repeat === "context") this.#advance(1);
     else this.#update({ playing: false, positionMs: p.durationMs });
@@ -339,25 +309,7 @@ export class DemoBackend implements Backend {
       liked: fixtures.collection(fixtures.LIKED_URI)?.tracks.some((t) => t.uri === track.uri) ?? false,
       canNext: this.#queue.length > 1,
       canPrevious: true,
-      ad: false,
-      premium: this.#premium(),
       ...change,
-    });
-  }
-
-  #playAd(): void {
-    this.#update({
-      title: fixtures.AD.title,
-      artist: "",
-      album: "",
-      artwork: fixtures.AD.artwork,
-      trackUri: "",
-      playing: true,
-      positionMs: 0,
-      durationMs: fixtures.AD.durationMs,
-      canNext: false,
-      canPrevious: false,
-      ad: true,
     });
   }
 
@@ -371,7 +323,7 @@ export class DemoBackend implements Backend {
 }
 
 function findTrack(uri: string): Track | undefined {
-  for (const uriOf of [fixtures.LIKED_URI, "spotify:album:paperlanterns", "spotify:album:neonorchard", "spotify:album:saltlines"]) {
+  for (const uriOf of [fixtures.LIKED_URI, "netease:album:paperlanterns", "netease:album:neonorchard", "netease:album:saltlines"]) {
     const found = fixtures.collection(uriOf)?.tracks.find((t) => t.uri === uri);
     if (found) return found;
   }

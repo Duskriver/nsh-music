@@ -11,8 +11,6 @@
 //     toggle: store.toggle,
 //     play: () => { if (!store.player().playing) store.toggle(); },
 //     pause: () => { if (store.player().playing) store.toggle(); },
-//     next: () => store.control("next", () => store.spotify.next()),
-//     previous: () => store.control("previous", () => store.spotify.previous()),
 //     seek: store.seek,
 //     raise: shell.showWindow, // installDesktopShell's handle
 //   });
@@ -21,7 +19,7 @@
 // app's window exists (SMTC needs one).
 
 import { cleanup, effect } from "nsh";
-import { MediaControls } from "spotish/native";
+import { MediaControls } from "nsh-music/native";
 
 /** What the media controls read from the player (store.player() fits). */
 export interface MediaPlayerView {

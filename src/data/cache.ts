@@ -54,7 +54,7 @@ function storedHead(savedAt: number): string {
 
 function persist(k: string, entry: Entry) {
   Storage.setItem(k, stored(entry)).catch((error) =>
-    console.warn("spotish: the cache could not save an entry:", String(error)),
+    console.warn("nsh-music: the cache could not save an entry:", String(error)),
   );
 }
 
@@ -116,7 +116,7 @@ export function hydrate(): Promise<void> {
       }
       evict();
     } catch (error) {
-      console.warn("spotish: the cache could not load:", String(error));
+      console.warn("nsh-music: the cache could not load:", String(error));
     }
     hydrated.set(true);
     bump();
@@ -159,7 +159,7 @@ export async function clearAccount(account: string): Promise<void> {
   try {
     for (const k of await Storage.keys()) if (k.startsWith(prefix)) await Storage.removeItem(k);
   } catch (error) {
-    console.warn("spotish: the cache could not clear an account:", String(error));
+    console.warn("nsh-music: the cache could not clear an account:", String(error));
   }
 }
 

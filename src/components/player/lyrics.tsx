@@ -26,11 +26,11 @@ function Note(props: { text: string }) {
   );
 }
 
-/** The lyrics of what plays, in every state: none while nothing (or an ad)
+/** The lyrics of what plays, in every state: none while nothing
  * plays, a spinner while they load, Retry when they don't, a note when the
  * song has none. `large`: a wide window's size. */
 export function LyricsView(props: { large?: boolean }) {
-  const track = () => (player().ad ? "" : player().trackUri);
+  const track = () => (player().trackUri);
   const query = lyricsQuery(track);
   // Only the lyrics of this track: the query keeps the last track's while it
   // loads the next.
@@ -41,7 +41,7 @@ export function LyricsView(props: { large?: boolean }) {
   const failed = () => lyrics() === undefined && query.state() === "errored";
   return (
     <View class="min-h-0 flex-1" testID="lyrics">
-      <If when={track()} else={<Note text={player().ad ? "Lyrics come back after the ad." : "Lyrics show here while a song plays."} />}>
+      <If when={track()} else={<Note text="Lyrics show here while a song plays." />}>
         <If
           when={lyrics()}
           else={

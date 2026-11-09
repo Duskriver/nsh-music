@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
 
-      # Spotish follows NSH's main: the nightly CLI (https://nsh.dev/docs/installation).
+      # nsh-music follows NSH's main: the nightly CLI (https://nsh.dev/docs/installation).
       - name: Install the NSH CLI (nightly)
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
@@ -58,19 +58,8 @@ jobs:
       - name: nsh check
         run: nsh check
 
+      - name: nsh build
+        run: nsh build
+
       - name: nsh test
         run: nsh test
-
-      - name: cargo test
-        run: cargo test
-
-      - name: Bridge
-        run: |
-          node --check src/bridge/bridge.js
-          shopt -s nullglob
-          tests=(src/bridge/*.test.mjs)
-          if [ ${#tests[@]} -gt 0 ]; then
-            node --test "${tests[@]}"
-          else
-            echo "No bridge tests."
-          fi

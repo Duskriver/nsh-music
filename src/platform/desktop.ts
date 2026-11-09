@@ -1,18 +1,7 @@
 // The desktop shell: a tray icon with the player's controls, and a main
 // window that hides instead of quitting when it is closed, so music keeps
-// playing (Spotify's own desktop app does the same). Desktop only: on the
+// playing. On the
 // web, phones and terminals `installDesktopShell` does nothing.
-//
-// Wiring (App.tsx, in the root component's body, which runs once):
-//
-//   installDesktopShell({
-//     isPlaying: () => store.player().playing,
-//     title: () => nowPlayingTitle(store.player()),
-//     togglePlay: store.toggle,
-//     next: () => store.control("next", () => store.spotify.next()),
-//     previous: () => store.control("previous", () => store.spotify.previous()),
-//     showNowPlaying: () => store.nowPlaying.set(true),
-//   });
 //
 // It must run while a component renders: `currentWindow()` throws
 // elsewhere. Everything it sets up goes with that component.
@@ -63,18 +52,14 @@ export function trayTitle(title: string): string {
   return t.length > 60 ? `${t.slice(0, 59)}…` : t;
 }
 
-/** The tray glyph (the logo's three level bars) in `color`, as an SVG data
+/** The tray glyph (the logo's music note) in `color`, as an SVG data
  * URI. Monochrome: a template on macOS, the panel's text color elsewhere. */
 export function trayIcon(color: string): string {
   // `token()` gives #rrggbbaa; SVG renderers differ on 8-digit hex.
   if (/^#[0-9a-f]{8}$/i.test(color)) color = color.slice(0, 7);
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">` +
-    `<g fill="${color}">` +
-    `<rect x="4" y="9.5" width="4" height="11" rx="2"/>` +
-    `<rect x="10" y="3.5" width="4" height="17" rx="2"/>` +
-    `<rect x="16" y="12.5" width="4" height="8" rx="2"/>` +
-    `</g></svg>`;
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 5 20 22" width="24" height="24">` +
+    `<path fill="${color}" d="M13 20.2V9.5a1.3 1.3 0 0 1 1-1.3l9-2.2a1 1 0 0 1 1.2 1v13c0 2-1.7 3.5-3.8 3.5-1.8 0-3-1-3-2.5 0-1.9 1.8-3.5 3.9-3.5.3 0 .6 0 .9.1v-6.8l-7.1 1.7v9.8c0 2-1.7 3.6-3.9 3.6-1.8 0-3.1-1.1-3.1-2.6 0-1.9 1.8-3.4 3.9-3.4.4 0 .7.1 1 .2Z"/></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
@@ -149,11 +134,11 @@ export function installDesktopShell(opts: DesktopShellOptions): DesktopShell {
     const showNowPlaying = opts.showNowPlaying;
     Tray.set({
       icon: trayIcon(ink),
-      tooltip: opts.title().trim() ? `Spotish: ${title}` : "Spotish",
+      tooltip: opts.title().trim() ? `nsh-music: ${title}` : "nsh-music",
       onClick: showWindow,
       menu: [
         // The app, on its own.
-        { label: "Open Spotish", onSelect: showWindow },
+        { label: "Open nsh-music", onSelect: showWindow },
         { type: "separator" },
         // What plays, and its controls.
         { label: title, disabled: true },

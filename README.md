@@ -2,11 +2,11 @@
 
 **基于 [NSH (Native Shell)](https://nsh.dev) 构建的轻量、纯原生网易云音乐桌面与终端客户端。**
 
-![NSH Music 界面预览](website/public/screenshot.png)
+![NSH Music 界面预览](website/public/screenshot.webp)
 
-本项目基于 [huacnlee/spotish](https://github.com/huacnlee/spotish) 的原生 UI 架构改造，并参考了 [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease) 的网易云协议实现。它将原有的无头浏览器 + Spotify Web Player 引擎完全替换为 **Rust 原生网易云 API 协议栈 + `rodio` 原生音频解码引擎**，无需安装任何外部浏览器或 DRM 组件，即可享受极速、低内存占用的原生音乐体验。
+本项目基于 [huacnlee/spotish](https://github.com/huacnlee/spotish) 的原生 UI 架构改造，并参考了 [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease) 的网易云协议实现。播放器使用 **Rust 原生网易云 API 协议栈** 和 **`rodio` 音频解码引擎**。
 
-> **非官方客户端声明**：本项目为第三方开源技术实验项目，与网易云音乐（NetEase Cloud Music）及 Spotify 无任何关联、背书或赞助关系。所有音乐、封面及商标版权归各自权利人所有。请支持正版音乐与版权方。
+> **非官方客户端声明**：本项目为第三方开源技术实验项目，与网易云音乐（NetEase Cloud Music）无任何关联、背书或赞助关系。所有音乐、封面及商标版权归各自权利人所有。请支持正版音乐与版权方。
 
 ---
 
@@ -36,7 +36,7 @@
 
 ## 工作原理
 
-- **Rust 原生引擎**（`src/spotify/netease/`）：
+- **Rust 原生引擎**（`src/music/netease/`）：
   - `crypto.rs`：实现网易云 EAPI 请求的 `AES-128-ECB` 加密与 `MD5` 签名。
   - `client.rs`：负责二维码登录、Cookie 会话持久化、歌单/搜索/专辑/歌手/红心/LRC 歌词请求与音频直链获取。
   - `player.rs`：基于 `rodio` 管理音频输出流与本地播放队列，并在解码时将 PCM 样本实时推送给频谱分析器。
@@ -62,7 +62,7 @@ curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
 ```sh
 nsh run                # 编译 Rust 引擎并打包运行桌面客户端
 nsh run --target tui   # 在终端（TUI 模式）中运行
-SPOTISH_DEMO=1 nsh run # 使用内置离线演示数据运行（无需网络与账号）
+NSH_MUSIC_DEMO=1 nsh run # 使用内置离线演示数据运行（无需网络与账号）
 nsh check              # 运行 cargo check 与 TypeScript 类型检查
 nsh test               # 运行 Rust 单元测试与 TSX 无头端到端测试
 nsh build              # 构建并校验原生导出与前端包

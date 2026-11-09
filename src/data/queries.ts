@@ -22,7 +22,7 @@ export function homeQuery(): CachedQuery<Home> {
 }
 
 /** A playlist, album, artist or Liked Songs by URI. */
-export function collectionQuery(uri: () => string): CachedQuery<Collection> {
+export function collectionQuery(uri: () => string | null): CachedQuery<Collection> {
   return cachedQuery(scoped(uri), (key) => {
     switch (kindOf(key)) {
       case "album":

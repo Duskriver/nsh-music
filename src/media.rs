@@ -3,13 +3,13 @@
 //! `playerctl` read; the System Media Transport Controls on Windows;
 //! `MPNowPlayingInfoCenter` on macOS), through the `souvlaki` crate.
 //!
-//! It knows nothing of the Spotify engine: TSX tells it what plays
+//! TSX tells it what plays
 //! (`setMetadata`, `setPlayback`) and hears the system's commands
 //! (`onCommand`), which it wires to the player (`src/platform/media.ts`).
 //!
 //! Platform notes:
-//! - Linux: registers `org.mpris.MediaPlayer2.spotish` on the session bus
-//!   (zbus, no libdbus). One per session: a second Spotish process may not
+//! - Linux: registers `org.mpris.MediaPlayer2.nsh_music` on the session bus
+//!   (zbus, no libdbus). One per session: a second nsh-music process may not
 //!   get the name, and its controls then stay silent (souvlaki's service
 //!   thread ends with a logged panic; the app is unaffected).
 //! - Windows: SMTC needs a top-level window of the process (`HWND`), which
@@ -241,8 +241,8 @@ mod backend {
             }
             let Some(hwnd) = super::window::hwnd() else { return false };
             let config = PlatformConfig {
-                dbus_name: "spotish",
-                display_name: "Spotish",
+                dbus_name: "nsh_music",
+                display_name: "nsh-music",
                 hwnd,
             };
             let mut controls = match MediaControls::new(config) {
@@ -432,7 +432,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(500));
         let get = |prop: &str| {
             let out = std::process::Command::new("busctl")
-                .args(["--user", "get-property", "org.mpris.MediaPlayer2.spotish", "/org/mpris/MediaPlayer2"])
+                .args(["--user", "get-property", "org.mpris.MediaPlayer2.nsh_music", "/org/mpris/MediaPlayer2"])
                 .args(["org.mpris.MediaPlayer2.Player", prop])
                 .output()
                 .unwrap();

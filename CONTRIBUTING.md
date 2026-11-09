@@ -12,8 +12,6 @@
    nsh --version
    ```
 
-> **提示**：由于本项目已采用 Rust 原生音频解码引擎（`rodio`）与原生网易云协议栈，**不再需要安装 Chrome / Edge 或 Widevine 组件**。
-
 ### NSH 版本同步说明
 
 `Cargo.toml` 从 Git 引用 `nsh-core`、`nsh-engine` 和 `nsh-testing`。`Cargo.lock` 中锁定的提交哈希需要与 `nsh --version` 打印的 CLI 构建哈希保持一致。升级 `nsh` CLI 后，请运行：
@@ -28,16 +26,18 @@ cargo update -p nsh-core --precise <hash>
 
 ```sh
 nsh run                       # 构建 Rust 引擎并打包 TSX 界面，在桌面端运行
-SPOTISH_DEMO=1 nsh run        # 演示模式：使用离线录制的示例数据运行（无需网络和账号）
+NSH_MUSIC_DEMO=1 nsh run        # 演示模式：使用离线录制的示例数据运行（无需网络和账号）
 nsh run --target tui          # 在终端中运行 TUI 字符界面
 ```
 
 ### 数据存储路径
 
-应用会话（`netease-session.json`）与缓存存储在各系统的标准应用数据目录下（可通过环境变量 `SPOTISH_DATA_DIR` 覆盖）：
-- **macOS**：`~/Library/Application Support/dev.huacnlee.spotish`
-- **Linux**：`$XDG_DATA_HOME/spotish`（默认 `~/.local/share/spotish`）
-- **Windows**：`%LOCALAPPDATA%\Spotish`
+应用会话（`netease-session.json`）存储在各系统的标准应用数据目录，可通过环境变量 `NSH_MUSIC_DATA_DIR` 覆盖。
+- **macOS**：`~/Library/Application Support/io.github.duskriver.nsh-music`
+- **Linux**：`$XDG_DATA_HOME/nsh-music`（默认 `~/.local/share/nsh-music`）
+- **Windows**：`%LOCALAPPDATA%\nsh-music`
+
+首次使用新默认目录时，应用会迁移旧版保存的网易云登录会话。
 
 ---
 
@@ -52,7 +52,7 @@ nsh test                               # 运行 cargo test 及所有 *.test.tsx 
 cargo test                             # 仅运行 Rust 单元测试
 ```
 
-测试永远不需要真实的网易云账号或联网环境：Rust 单元测试验证加密与协议解析，UI 端到端测试（`tests/app.test.tsx`）运行在离线 `DemoBackend` 上。测试时的临时目录请指向仓库外的路径或 `target/agents/tmp`。
+测试永远不需要真实的网易云账号或联网环境：Rust 单元测试验证加密与协议解析，UI 端到端测试（`tests/app.test.tsx`）运行在离线 `DemoBackend` 上。运行检查时请将 `TMPDIR` 指向仓库内的 `target/agents/tmp`。
 
 ---
 
@@ -60,17 +60,17 @@ cargo test                             # 仅运行 Rust 单元测试
 
 ### Rust 层（原生引擎与平台集成）
 
-- `src/spotify/netease/` — **纯原生网易云音乐引擎**：
+- `src/music/netease/` — **纯原生网易云音乐引擎**：
   - `crypto.rs`：EAPI 请求的 `AES-128-ECB`（PKCS7）加密与 `MD5` 摘要实现。
   - `client.rs`：网易云 Web API 与 EAPI 客户端，包含二维码扫码登录、Cookie 持久化、首页推荐、搜索、歌单/专辑/歌手详情、红心曲库、LRC 歌词解析与音频直链获取。
   - `player.rs`：基于 `rodio` 的原生音频播放器与播放队列管理器，通过 `MeteredSource` 实时分流 PCM 音频采样。
   - `session.rs`：后台会话线程，对接 UI 指令并发布 `Snapshot` 状态更新。
-- `src/spotify/model.rs` — 跨语言数据模型（通过 `#[derive(JsObject)]` 导出给 TSX）。
-- `src/spotify/demo.rs` — 离线演示与测试数据源。
+- `src/music/model.rs` — 跨语言数据模型（通过 `#[derive(JsObject)]` 导出给 TSX）。
+- `src/music/demo.rs` — 离线演示与测试数据源。
 - `src/audio.rs` — 实时音频频谱分析器（`AudioMeter`），直接消费播放器分流的音频采样，计算 16 段频谱与节拍脉冲。
 - `src/media.rs` — 系统媒体控制与多媒体快捷键集成（MPRIS / macOS MediaPlayer / Windows SMTC）。
 - `src/theme.rs` — 系统主题监听与色彩映射。
-- `src/exports.rs` — 向 TSX 导出的原生模块入口（`spotish/native`）。
+- `src/exports.rs` — 向 TSX 导出的原生模块入口（`nsh-music/native`）。
 
 ### TSX 层（原生用户界面）
 

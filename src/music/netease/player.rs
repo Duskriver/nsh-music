@@ -11,7 +11,7 @@ use log::warn;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
 use super::client::NetEaseClient;
-use crate::spotify::model::{EngineError, ErrorCode, Player, Repeat, Track};
+use crate::music::model::{EngineError, ErrorCode, Player, Repeat, Track};
 
 static AUDIO_TAP: OnceLock<tokio::sync::broadcast::Sender<f32>> = OnceLock::new();
 
@@ -188,8 +188,6 @@ impl PlayerManager {
             liked: self.liked,
             can_next,
             can_previous,
-            ad: false,
-            premium: Some(true),
         }
     }
 
@@ -243,13 +241,13 @@ impl PlayerManager {
             return Err(EngineError::new(ErrorCode::NotFound, "列表为空，没有可播放的歌曲"));
         }
 
-        let context_href = if context_uri == "spotify:collection:tracks" {
+        let context_href = if context_uri == "netease:collection:tracks" {
             "/collection/tracks".to_string()
-        } else if let Some(id) = context_uri.strip_prefix("spotify:playlist:") {
+        } else if let Some(id) = context_uri.strip_prefix("netease:playlist:") {
             format!("/playlist/{id}")
-        } else if let Some(id) = context_uri.strip_prefix("spotify:album:") {
+        } else if let Some(id) = context_uri.strip_prefix("netease:album:") {
             format!("/album/{id}")
-        } else if let Some(id) = context_uri.strip_prefix("spotify:artist:") {
+        } else if let Some(id) = context_uri.strip_prefix("netease:artist:") {
             format!("/artist/{id}")
         } else {
             context_uri.to_string()

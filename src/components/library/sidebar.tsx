@@ -8,7 +8,7 @@ import { AlertDialog, Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
 import type { Item } from "../../backend/types";
 import { libraryQuery, meQuery } from "../../data/queries";
 import { currentRoute, type Route, switchTo } from "../../nav";
-import { NSH_URL, openExternal, openPremium, REPO_URL, SPOTIFY_URL } from "../../state/links";
+import { NSH_URL, openExternal, REPO_URL } from "../../state/links";
 import { setAboutOpen, setDrawerOpen } from "../../state/overlays";
 import { isCurrentContext, isPlayingContext, player } from "../../state/player";
 import { signedIn, signIn, signOut } from "../../state/session";
@@ -260,7 +260,7 @@ function SignedOutPrompt(props: { compact: boolean }) {
       else={
         <View class="m-2 gap-3 rounded-(--radius-card) border border-border p-4">
           <Text class="text-base font-bold text-foreground">Your playlists live here</Text>
-          <Text class="text-sm text-muted-foreground">Log in with your Spotify account, free or Premium, to see your library.</Text>
+          <Text class="text-sm text-muted-foreground">Log in with your NetEase Cloud Music account to see your library.</Text>
           <View class="flex-row">
             <ActionButton label="Log in" variant="primary" onPress={signIn} />
           </View>
@@ -303,11 +303,10 @@ function Entry(props: { icon: IconName; label: string; external?: boolean; check
 const Separator = () => <MenuSeparator class={terminal ? "hidden" : "-mx-1 my-1 h-px bg-border"} />;
 
 /** Logs out once the user confirms: the account goes with the music, and
- * coming back takes the browser's sign-in again, so a slip of the pointer
- * must not do it. */
+ * listening again requires signing in. */
 async function confirmSignOut(): Promise<void> {
   const { action } = await AlertDialog.show({
-    title: "Log out of Spotify?",
+    title: "Log out of NetEase Cloud Music?",
     description: "The music stops, and you'll need to log in again to listen.",
     actions: [
       { id: "cancel", label: "Cancel", role: "cancel" },
@@ -318,10 +317,8 @@ async function confirmSignOut(): Promise<void> {
   if (action === "logOut") await signOut();
 }
 
-/** The user menu: who is signed in and on which plan, then Premium, Spotish
- * and NSH, the FPS monitor, and Exit; Log out on the account's row. */
+/** The account, project links, FPS monitor and app exit. */
 function MenuEntries(props: { name: string; image: string }) {
-  const premium = () => player().premium === true;
   return (
     <>
       <If when={signedIn() === true && !terminal}>
@@ -329,7 +326,6 @@ function MenuEntries(props: { name: string; image: string }) {
           <Cover src={props.image} size={32} round fallback="user" />
           <View class="min-w-0 flex-1">
             <Text class="line-clamp-1 text-sm font-semibold text-popover-foreground">{props.name}</Text>
-            <Text class="text-xs text-muted-foreground">{premium() ? "Spotify Premium" : "Spotify Free"}</Text>
           </View>
           {/* Log out belongs to the account, so it sits on the account's
               row; an item still, for the menu's keys. It asks first. */}
@@ -344,11 +340,6 @@ function MenuEntries(props: { name: string; image: string }) {
         </View>
         <Separator />
       </If>
-      <If when={!premium()}>
-        <Entry icon="crown" label="Premium" external onSelect={openPremium} />
-      </If>
-      <Entry icon="music" label="Spotify" external onSelect={() => openExternal(SPOTIFY_URL)} />
-      <Separator />
       <Entry icon="info" label="About…" onSelect={() => setAboutOpen(true)} />
       <Entry icon="github" label="GitHub" external onSelect={() => openExternal(REPO_URL)} />
       <Entry icon="code" label="NSH" external onSelect={() => openExternal(NSH_URL)} />
@@ -371,14 +362,14 @@ function MenuEntries(props: { name: string; image: string }) {
 
 
 /** The account at the sidebar's foot, which opens the user menu: the
- * user's picture and name (Spotish, signed out). */
+ * user's picture and name (nsh-music, signed out). */
 export function Account(props: { compact: boolean; placement?: "top" | "bottom"; align?: "start" | "end" }) {
   const me = meQuery();
   // Up from the sidebar's foot; down from the header's corner.
   const side = () => props.placement ?? "top";
   // Flush with its left edge, or (in the window's top-right corner) its right.
   const align = () => props.align ?? "start";
-  const name = () => (signedIn() === true ? me.data()?.name || "Account" : "Spotish");
+  const name = () => (signedIn() === true ? me.data()?.name || "Account" : "nsh-music");
   const open = signal(false);
   return (
     <Menu

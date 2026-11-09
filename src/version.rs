@@ -8,18 +8,18 @@
 
 use nsh_core::prelude::*;
 
-/// The API version of Spotish's Rust exports, for TSX delivered as a signed
+/// The API version of nsh-music's Rust exports, for TSX delivered as a signed
 /// package to check what the installed app has.
 #[module]
 pub struct Version;
 
 /// Raise by one with every release that adds or changes an export
-/// (`Spotify`, `MediaControls`, `SystemTheme`, `Version`); never lower it.
-pub const API: u32 = 1;
+/// (`MusicEngine`, `MediaControls`, `SystemTheme`, `Version`); never lower it.
+pub const API: u32 = 2;
 
 #[module]
 impl Version {
-    /// The API version of the installed app's Rust exports: 1 has `Spotify`,
+    /// The API version of the installed app's Rust exports: 2 has `MusicEngine`,
     /// `MediaControls`, `SystemTheme` and `Version`.
     pub fn api() -> u32 {
         API
