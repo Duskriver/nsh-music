@@ -8,7 +8,7 @@ use std::{
 };
 
 use log::warn;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source, source::SeekError};
 
 use super::client::NetEaseClient;
 use crate::music::model::{EngineError, ErrorCode, Player, Repeat, Track};
@@ -36,7 +36,23 @@ struct MeteredSource<S> {
     channels: NonZeroU16,
     sample_rate: NonZeroU32,
     channel_idx: u16,
-    left_sample: f32,
+    left_sample: Option<f32>,
+}
+
+fn decode_audio(bytes: Vec<u8>) -> Result<MeteredSource<Decoder<Cursor<Vec<u8>>>>, EngineError> {
+    let decoder = Decoder::builder()
+        .with_byte_len(bytes.len() as u64)
+        .with_seekable(true)
+        .with_data(Cursor::new(bytes))
+        .build()
+        .map_err(|e| EngineError::new(ErrorCode::Shape, format!("音频解码失败: {e}")))?;
+    Ok(MeteredSource {
+        channels: decoder.channels(),
+        sample_rate: decoder.sample_rate(),
+        inner: decoder,
+        channel_idx: 0,
+        left_sample: None,
+    })
 }
 
 impl<S: Source<Item = f32>> Source for MeteredSource<S> {
@@ -52,6 +68,14 @@ impl<S: Source<Item = f32>> Source for MeteredSource<S> {
     fn total_duration(&self) -> Option<Duration> {
         self.inner.total_duration()
     }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
+        self.inner.try_seek(position)?;
+        // The decoder preserves the active channel. Discard any half-frame
+        // from before the jump instead of mixing it with the new position.
+        self.left_sample = None;
+        Ok(())
+    }
 }
 
 impl<S: Source<Item = f32>> Iterator for MeteredSource<S> {
@@ -65,11 +89,12 @@ impl<S: Source<Item = f32>> Iterator for MeteredSource<S> {
             let _ = tap.send(sample);
         } else if ch == 2 {
             if self.channel_idx == 0 {
-                self.left_sample = sample;
+                self.left_sample = Some(sample);
                 self.channel_idx = 1;
             } else {
-                let mono = (self.left_sample + sample) * 0.5;
-                let _ = tap.send(mono);
+                if let Some(left) = self.left_sample.take() {
+                    let _ = tap.send((left + sample) * 0.5);
+                }
                 self.channel_idx = 0;
             }
         }
@@ -205,18 +230,8 @@ impl PlayerManager {
             .map_err(|e| EngineError::new(ErrorCode::Shape, format!("failed to read audio body: {e}")))?;
 
         if let Some(ref mut st) = self.stream_state {
+            let metered = decode_audio(bytes)?;
             st.player.stop();
-            let decoder = Decoder::new(Cursor::new(bytes))
-                .map_err(|e| EngineError::new(ErrorCode::Shape, format!("音频解码失败: {e}")))?;
-            let channels = decoder.channels();
-            let sample_rate = decoder.sample_rate();
-            let metered = MeteredSource {
-                inner: decoder,
-                channels,
-                sample_rate,
-                channel_idx: 0,
-                left_sample: 0.0,
-            };
             st.player.append(metered);
             st.player.set_volume(if self.muted { 0.0 } else { self.volume as f32 });
             st.player.play();
@@ -382,9 +397,18 @@ impl PlayerManager {
 
     /// Seeks to a position in milliseconds.
     pub fn seek(&mut self, ms: f64) -> Result<(), EngineError> {
+        let Some(track) = &self.current_track else {
+            return Ok(());
+        };
+        if !ms.is_finite() {
+            return Err(EngineError::new(ErrorCode::Shape, "无效的播放位置"));
+        }
+        let ms = ms.clamp(0.0, track.duration_ms.max(0.0));
         let dur = Duration::from_millis(ms as u64);
         if let Some(ref st) = self.stream_state {
-            let _ = st.player.try_seek(dur);
+            st.player
+                .try_seek(dur)
+                .map_err(|e| EngineError::new(ErrorCode::Internal, format!("无法调整播放进度: {e}")))?;
         }
         self.position_ms = ms;
         if self.playing {
@@ -456,5 +480,28 @@ impl PlayerManager {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metered_audio_seeks_forward_and_backward() {
+        // One second of 8 kHz mono PCM, with a different level in each half.
+        let mut wav = Vec::from(&b"RIFF\xA4\x3E\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1F\x00\x00\x80\x3E\x00\x00\x02\x00\x10\x00data\x80\x3E\x00\x00"[..]);
+        for sample in [8_192_i16, -8_192] {
+            for _ in 0..4_000 {
+                wav.extend_from_slice(&sample.to_le_bytes());
+            }
+        }
+        let mut source = decode_audio(wav).unwrap();
+
+        assert!(source.next().unwrap() > 0.0);
+        source.try_seek(Duration::from_millis(750)).unwrap();
+        assert!(source.next().unwrap() < 0.0);
+        source.try_seek(Duration::from_millis(250)).unwrap();
+        assert!(source.next().unwrap() > 0.0);
     }
 }
