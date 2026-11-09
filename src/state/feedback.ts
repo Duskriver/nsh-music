@@ -9,12 +9,12 @@ import { type BackendError, errorOf } from "../backend/types";
 
 /** Every message the app shows as a toast. */
 export const MESSAGES = {
-  signInToPlay: "Log in to Spotify to play music.",
-  playFailed: "Couldn't play this. Try again.",
-  likeFailed: "Couldn't update Liked Songs. Try again.",
-  signInFailed: "Couldn't open the Spotify login. Try again.",
-  retryFailed: "Spotify still isn't available. Quit Spotish and open it again.",
-  freeShuffles: "Spotify Free shuffles playlists. Premium lets you pick any song.",
+  signInToPlay: "请扫码登录网易云音乐以播放歌曲",
+  playFailed: "播放失败，请重试",
+  likeFailed: "无法更新红心歌单，请重试",
+  signInFailed: "无法打开网易云登录二维码，请重试",
+  retryFailed: "网易云服务不可用，请退出后重试",
+  freeShuffles: "当前账号播放受限，开通黑胶 VIP 可畅听所有歌曲",
 } as const;
 
 export type MessageId = keyof typeof MESSAGES;
@@ -83,7 +83,11 @@ export function announce(text: string, action?: ToastAction): void {
 export function report(id: MessageId, error: unknown, action?: ToastAction): BackendError {
   const parsed = errorOf(error);
   console.warn(`spotish: ${id}: ${parsed.code}: ${parsed.message}`);
-  notify(id, action);
+  if (parsed.message && parsed.message.length > 0 && parsed.message !== parsed.code) {
+    announce(parsed.message, action);
+  } else {
+    notify(id, action);
+  }
   return parsed;
 }
 

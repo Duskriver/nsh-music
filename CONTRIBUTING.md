@@ -1,157 +1,91 @@
-# Contributing to Spotish
+# 开发与贡献指南 (CONTRIBUTING.md)
 
-Contributions are welcome. If you find a bug or have an idea, please open an issue or a pull request.
+欢迎参与 `nsh-music` 的开发与改进！在提交代码前，请先阅读以下项目结构、开发环境配置与验证规范。
 
-Please submit **one PR that does one thing** — it is easier to review and faster to merge. Write clean code that
-follows the style and organization of the code around it, and make sure the checks below pass.
+## 环境准备
 
-## Respecting Spotify
-
-Spotish plays through Spotify's own web player with the listener's own account, and it **never blocks, skips, mutes,
-hides or shortens Spotify's ads**. Keep it that way: changes that remove ads or get around Spotify Free's limits (on
-demand play, skips) will not be merged. Point listeners to Spotify Premium instead. Spotish is unofficial: use
-"Spotify" only to say what Spotish works with, and do not use Spotify's logo, green or look.
-
-## Setup
-
-1. **Rust** through [rustup](https://rustup.rs), and on Linux GTK 4.14+ development packages (see NSH's
-   [installation guide](https://nsh.dev/docs/installation.md)).
-2. **The `nsh` CLI, nightly.** Spotish follows NSH's `main` branch. Install the nightly build (macOS arm64, Linux
-   x86_64; Windows: `$env:NSH_VERSION="nightly"; irm https://nsh.dev/install.ps1 | iex`):
+1. **Rust 工具链**：通过 [rustup](https://rustup.rs) 安装（Linux 需安装 GTK 4.14+ 及 ALSA 开发包，详见 [NSH 安装指南](https://nsh.dev/docs/installation.md)）。
+2. **`nsh` CLI (nightly)**：本项目跟随 NSH `main` 分支，请安装 nightly 版本的 CLI：
 
    ```sh
    curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
-   nsh --version    # e.g. "nsh 0.4.0 (f81b965)": the commit it was built from
+   nsh --version
    ```
 
-3. **A browser with Widevine**: Google Chrome, Chromium, Microsoft Edge or Brave. Only needed to play music, not for
-   demo mode or the tests.
+> **提示**：由于本项目已采用 Rust 原生音频解码引擎（`rodio`）与原生网易云协议栈，**不再需要安装 Chrome / Edge 或 Widevine 组件**。
 
-### How Spotish depends on NSH
+### NSH 版本同步说明
 
-`Cargo.toml` takes NSH's crates from Git, from its `main` branch:
-
-```toml
-nsh-core = { git = "https://github.com/longbridge/nsh", branch = "main" }
-```
-
-`Cargo.lock` holds the commit. The `nsh` CLI generates its hosts from the same Git checkout Cargo resolved, so the app
-and its hosts share one `nsh-core`. The locked commit must be the one your CLI was built from (the hash
-`nsh --version` prints): the code the CLI generates calls that commit's API. The `nightly` tag moves with NSH's
-`main`; to follow it, reinstall the CLI, run `cargo update -p nsh-core` (it takes `main`'s latest commit, so do it
-soon after the nightly is published; `cargo update -p nsh-core --precise <hash>` takes the exact commit
-`git ls-remote https://github.com/longbridge/nsh refs/tags/nightly` prints), and run `nsh check` and `nsh test`. CI
-warns when the nightly CLI and the locked commit differ.
-
-To work against a local NSH checkout instead (for example while changing NSH itself), point the `nsh-*` lines at it
-with `path = "../nsh/crates/nsh-core"` (and so on) and use a CLI built from that checkout. Do not commit that change:
-nobody else has your checkout.
-
-## Running
+`Cargo.toml` 从 Git 引用 `nsh-core`、`nsh-engine` 和 `nsh-testing`。`Cargo.lock` 中锁定的提交哈希需要与 `nsh --version` 打印的 CLI 构建哈希保持一致。升级 `nsh` CLI 后，请运行：
 
 ```sh
-nsh run                       # build the engine, bundle the TSX interface, run on this machine
-SPOTISH_DEMO=1 nsh run        # demo mode: recorded sample data, no browser, no account
-nsh run --target tui          # the terminal interface
+cargo update -p nsh-core --precise <hash>
 ```
 
-- **Demo mode** (`SPOTISH_DEMO=1`) is the quickest way to work on the interface, and is what Web and mobile run.
-- **Importing an existing login.** Set `SPOTISH_PROFILE` to the profile directory of a browser you are already signed
-  in to Spotify with (for example `~/.config/chromium` or `~/.config/google-chrome`). Spotish imports that login once
-  into its own profile; close that browser first. Without it, press **Log in** and sign in in the window that opens.
-- `SPOTISH_BROWSER` picks the browser executable when Spotish does not find yours.
+---
 
-## Checks and tests
-
-Run these before opening a PR; CI runs the same (`.github/workflows/ci.yml`):
+## 运行方式
 
 ```sh
-nsh check                              # cargo check --all-targets, then tsc
-nsh build                              # describe the crate and bundle the TSX (bundler diagnostics)
-nsh test                               # cargo test, then the *.test.tsx files headless
-cargo test                             # the Rust crate alone
-node --check src/bridge/bridge.js      # the bridge parses
-node --test src/bridge/*.test.mjs      # the bridge's tests, when present
+nsh run                       # 构建 Rust 引擎并打包 TSX 界面，在桌面端运行
+SPOTISH_DEMO=1 nsh run        # 演示模式：使用离线录制的示例数据运行（无需网络和账号）
+nsh run --target tui          # 在终端中运行 TUI 字符界面
 ```
 
-Tests never need a Spotify account or the network: test the engine on recorded bridge payloads
-(`src/spotify/fixtures/`), and the interface against demo data. If a test runs something that makes temporary
-directories, point `TMPDIR` outside the repository.
+### 数据存储路径
 
-## Commits and pull requests
+应用会话（`netease-session.json`）与缓存存储在各系统的标准应用数据目录下（可通过环境变量 `SPOTISH_DATA_DIR` 覆盖）：
+- **macOS**：`~/Library/Application Support/dev.huacnlee.spotish`
+- **Linux**：`$XDG_DATA_HOME/spotish`（默认 `~/.local/share/spotish`）
+- **Windows**：`%LOCALAPPDATA%\Spotish`
 
-Spotish follows [NSH's rules](https://github.com/longbridge/nsh/blob/main/CONTRIBUTING.md) for commits and pull
-requests:
+---
 
-- **Every change goes through a pull request; nothing is pushed to `main` directly.** That includes documentation,
-  version bumps and CI or workflow fixes. Make a topic branch, push it, open a PR against `main`, and merge it once
-  CI passes.
-- **One commit, one PR: one thing.** No unrelated refactors, cleanups or formatting along the way. A change that does
-  two things is two PRs.
-- **Subjects and PR titles are `<area>: <What the change does>`.** The area is lower case and names one part, never
-  several separated by commas. For a change that spans parts, name the part it is mostly about. After the colon comes
-  an imperative sentence that starts with a capital letter, with no trailing period, about 72 characters in all. Say
-  what it does for people using Spotish, not which files changed. Never use conventional prefixes (`fix:`, `feat:`).
+## 代码检查与测试
 
-  The areas:
+在提交代码或发起 PR 前，请确保以下检查全部通过：
 
-  | Area | What it covers |
-  | --- | --- |
-  | `engine` | The Rust engine: the browser, CDP and the session (`src/spotify/`, `src/exports.rs`) |
-  | `bridge` | The script that drives the web player (`src/bridge/`) |
-  | `audio` | The audio meter (`src/audio.rs`, `src/platform/audio.ts`) |
-  | `media` | The system's media controls and keys (`src/media.rs`, `src/platform/media.ts`) |
-  | `theme` | The system theme and the color tokens (`src/theme.rs`, `theme.json`) |
-  | A screen or component | A part of the interface, in snake case: `player`, `now_playing`, `lyrics`, `sidebar`, `header`, `home`, `search`, `collection`, `nav`, `ui` (the shared controls) |
-  | `desktop`, `phone`, `tui` | One shell (`src/shells/`) |
-  | `data` | Queries and the cache (`src/data/`) |
-  | `ci`, `release` | The workflows: checks, and packaging and publishing |
-  | `website`, `docs`, `tests` | The site, the documentation, the tests alone |
+```sh
+nsh check                              # 执行 cargo check --all-targets 与 tsc 类型检查
+nsh build                              # 检查 Rust 导出文档注释并打包 TSX
+nsh test                               # 运行 cargo test 及所有 *.test.tsx 无头测试
+cargo test                             # 仅运行 Rust 单元测试
+```
 
-  For example: `lyrics: Show the lyrics in Now Playing`, `nav: Keep the last four pages in the stack`,
-  `ci: Install GStreamer for the Linux builds`.
-- **The body explains why**, wrapped at 72 columns. A change made for speed or memory includes its before and after
-  numbers (`nsh test --trace`, or `tests/bench.test.tsx`).
-- **A PR follows the template** (`.github/pull_request_template.md`): what it changes and why, screenshots of anything
-  visible, and how it was tested, including what was not.
-- End AI-assisted commits with a `Co-Authored-By:` line naming the model.
+测试永远不需要真实的网易云账号或联网环境：Rust 单元测试验证加密与协议解析，UI 端到端测试（`tests/app.test.tsx`）运行在离线 `DemoBackend` 上。测试时的临时目录请指向仓库外的路径或 `target/agents/tmp`。
 
-## Project layout
+---
 
-Rust (the engine):
+## 项目目录结构
 
-- `src/spotify/` — runs and drives Spotify's web player in your browser over the DevTools protocol (browser discovery
-  and launch, the CDP connection, the session), the typed models of what it returns, and demo data.
-- `src/exports.rs` — what the engine exports to TSX (`#[class]` classes and `JsObject` types). This is the only
-  door between Rust and TSX; keep it typed.
-- `src/lib.rs` — the crate root.
+### Rust 层（原生引擎与平台集成）
 
-The bridge:
+- `src/spotify/netease/` — **纯原生网易云音乐引擎**：
+  - `crypto.rs`：EAPI 请求的 `AES-128-ECB`（PKCS7）加密与 `MD5` 摘要实现。
+  - `client.rs`：网易云 Web API 与 EAPI 客户端，包含二维码扫码登录、Cookie 持久化、首页推荐、搜索、歌单/专辑/歌手详情、红心曲库、LRC 歌词解析与音频直链获取。
+  - `player.rs`：基于 `rodio` 的原生音频播放器与播放队列管理器，通过 `MeteredSource` 实时分流 PCM 音频采样。
+  - `session.rs`：后台会话线程，对接 UI 指令并发布 `Snapshot` 状态更新。
+- `src/spotify/model.rs` — 跨语言数据模型（通过 `#[derive(JsObject)]` 导出给 TSX）。
+- `src/spotify/demo.rs` — 离线演示与测试数据源。
+- `src/audio.rs` — 实时音频频谱分析器（`AudioMeter`），直接消费播放器分流的音频采样，计算 16 段频谱与节拍脉冲。
+- `src/media.rs` — 系统媒体控制与多媒体快捷键集成（MPRIS / macOS MediaPlayer / Windows SMTC）。
+- `src/theme.rs` — 系统主题监听与色彩映射。
+- `src/exports.rs` — 向 TSX 导出的原生模块入口（`spotish/native`）。
 
-- `src/bridge/bridge.js` — the script installed in the web player. It reads what the player uses to talk to Spotify
-  and reports the player's state. Every selector and query name of the web player is read in this one file, so a
-  change to Spotify's web player is mended here. Its tests sit beside it as `*.test.mjs`.
+### TSX 层（原生用户界面）
 
-TSX (the interface), from `App.tsx`:
+- `src/backend/` — `Backend` 契约接口（`types.ts`）及其实现：`EngineBackend`（桌面与终端）和 `DemoBackend`（Web、移动端与自动化测试）。
+- `src/state/` — 响应式状态存储（`engine.ts`、`player.ts`、`session.ts`、`feedback.ts`、`visual.ts`）。
+- `src/data/` — 账号隔离的缓存与响应式数据查询（`queries.ts`、`cache.ts`）。
+- `src/components/` — 基于主题 Token 封装的通用控件、图标、虚拟化曲目列表与播放器组件。
+- `src/pages/` — 首页（`home.tsx`）、搜索（`search.tsx`）、歌单/专辑/歌手详情（`collection.tsx`）及扫码登录/关于弹窗（`dialogs.tsx`）。
+- `src/shells/` — 桌面端（`desktop.tsx`）、手机端（`phone.tsx`）与终端（`terminal.tsx`）自适应外壳。
+- `theme.json` — 浅色与深色模式的语义化颜色与尺寸 Token。
+- `tests/` — 端到端 UI 测试（`app.test.tsx`）、着色器编译测试（`shaders.rs`）与性能基准测试（`bench.test.tsx`）。
 
-- `src/backend/` — the `Backend` interface and its implementations: the engine (desktop, TUI), demo data (Web, mobile,
-  tests) and, later, a remote control for a desktop Spotish.
-- `src/state/` — the app's stores (engine, player, session, feedback), the one owner of what the backend reports.
-- `src/data/` — data loading and the cache (keyed by account, cleared on sign-out).
-- `src/components/` — the app's own components: theme-token styling, icons, controls, and shared player pieces
-  (transport, seek bar, like). Wrap each `nsh/base` component once here.
-- `src/pages/` — Home, Search, Library, collections, Now Playing, About.
-- `src/shells/` — Desktop, Phone and Terminal shells that arrange the pages.
-- `src/platform/` — platform integrations (tray, media keys, system theme).
-- `src/nav.ts` — navigation: a stack of pages that keep their scroll, with back.
-- `theme.json` — the color tokens, light and dark. Draw with tokens, never raw colors.
-- `tests/` — the app's flows on the demo backend (`app.test.tsx`), the opt-in benchmarks (`bench.test.tsx`), and the
-  Rust tests.
+---
 
-The website (`website/`, Astro) is separate: `cd website && bun install && bun run build`. It also serves the
-installers, `website/public/install.sh` and `install.ps1`.
+## 提交规范
 
-## Built on NSH
-
-Read NSH's [coding and design guides](https://nsh.dev/docs) before changing the interface, and keep the look Spotish's
-own.
+- 保持每个提交聚焦于单一改动，提交信息格式为 `<area>: <简要描述改动内容>`（例如 `engine: Add fallback for desktop LRC lyrics`、`player: Fix repeat track seek position`）。
+- 任何导出到 TSX 的 Rust 类型、字段和方法都必须包含 `///` 文档注释，确保 `nsh build` 零警告。

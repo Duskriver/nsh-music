@@ -15,7 +15,7 @@
   "rust": ".",
   "minRuntime": "0.4.0",
   "updater": {
-    "github": "huacnlee/spotish"
+    "github": "Duskriver/nsh-music"
   },
   "macos": {
     "infoPlist": {

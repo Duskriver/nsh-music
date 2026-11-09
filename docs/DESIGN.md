@@ -603,9 +603,8 @@ playing bars rest.
   sample a backdrop, and unmount what is hidden (the player bar under Now
   Playing). Now Playing must hold the display's refresh rate.
 
-## Obligations
+## Architecture & Obligations
 
-Not style, and never traded away: Spotify's ads play and are never blocked or
-skipped; Premium is always offered to free accounts; the unofficial
-disclaimer ("Spotish is an unofficial client and is not affiliated with
-Spotify.") stays in About and the first-run sheet; NSH is credited.
+- **Pure Native Engine**: The desktop and terminal shells run against the native Rust NetEase Cloud Music engine (`src/spotify/netease/`), decoding audio streams directly via `rodio` and feeding PCM samples directly into `AudioMeter` (`src/audio.rs`) for 60fps spectrum and beat-reactive visuals without requiring OS audio capture permissions.
+- **QR Code Sign-In**: Signing in opens `SigningInDialog` (`src/pages/dialogs.tsx`) with an inline SVG QR code generated in Rust (`qrcode` crate) for scanning with the NetEase Cloud Music mobile app.
+- **Obligations**: The unofficial disclaimer stays in About and the first-run sheet, and NSH is credited.

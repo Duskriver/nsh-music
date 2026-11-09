@@ -25,6 +25,10 @@ export interface Health {
   status: HealthStatus;
   /** Why it failed, while `status` is `"failed"`. */
   error: BackendError | null;
+  /** The QR code data URL (when signing in). */
+  qrImage?: string;
+  /** Status prompt or instruction for user during sign-in. */
+  prompt?: string;
 }
 
 /** The player's state: one object per change. */
