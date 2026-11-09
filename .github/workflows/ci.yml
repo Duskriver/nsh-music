@@ -47,7 +47,7 @@ jobs:
       # The nightly tag moves; say so when they part (see CONTRIBUTING.md).
       - name: Compare the CLI with the locked NSH
         run: |
-          cli="$(nsh --version | sed -n 's/.*(\([0-9a-f]*\)).*/\1/p')"
+          cli="$(nsh --version | sed -n 's/.*(\([0-9a-f]\{7,\}\)[ )].*/\1/p')"
           locked="$(grep -A2 '^name = "nsh-core"$' Cargo.lock | sed -n 's/^source = ".*#\([0-9a-f]*\)"$/\1/p')"
           echo "nsh CLI: $cli, Cargo.lock: $locked"
           case "$locked" in

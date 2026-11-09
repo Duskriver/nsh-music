@@ -37,10 +37,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # QuickJS is C (bindgen needs libclang); the Linux host links GTK 4, GStreamer (NSH's audio) and ALSA (rodio).
-      - name: Install clang, GTK 4, GStreamer and ALSA
+      # QuickJS is C (bindgen needs libclang); the Linux host links GTK 4, WebKitGTK (NSH's web views), GStreamer
+      # (NSH's audio) and ALSA (rodio).
+      - name: Install clang, GTK 4, WebKitGTK, GStreamer and ALSA
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libasound2-dev
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -68,7 +69,7 @@ jobs:
       - name: Compare the CLI with the locked NSH
         run: |
           # Windows checkouts may end lines with CRLF.
-          cli="$(nsh --version | tr -d '\r' | sed -n 's/.*(\([0-9a-f]*\)).*/\1/p')"
+          cli="$(nsh --version | tr -d '\r' | sed -n 's/.*(\([0-9a-f]\{7,\}\)[ )].*/\1/p')"
           locked="$(tr -d '\r' < Cargo.lock | grep -A2 '^name = "nsh-core"$' | sed -n 's/^source = ".*#\([0-9a-f]*\)"$/\1/p')"
           echo "nsh CLI: $cli, Cargo.lock: $locked"
           [ -n "$cli" ] && [ -n "$locked" ] || { echo "::error::Could not read the CLI or the locked NSH commit."; exit 1; }
