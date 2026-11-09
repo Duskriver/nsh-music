@@ -6,7 +6,7 @@ export const PREMIUM_URL = "https://www.spotify.com/premium/";
 export const SPOTIFY_URL = "https://www.spotify.com/";
 export const TERMS_URL = "https://www.spotify.com/legal/end-user-agreement/";
 export const NSH_URL = "https://nsh.dev";
-export const REPO_URL = "https://github.com/huacnlee/spotish";
+export const REPO_URL = "https://github.com/Duskriver/nsh-music";
 
 /** Opens `url` in the system browser; anything but https is refused. */
 export function openExternal(url: string): void {

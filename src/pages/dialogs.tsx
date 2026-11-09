@@ -2,7 +2,7 @@
 // and the first-run sheet. Each is `nsh/base`'s `Dialog` or `Sheet`, which
 // own focus, Escape and back.
 
-import { Scroll, Text, View } from "nsh";
+import { Image, Scroll, Text, View } from "nsh";
 import { ActionButton, IconButton, terminal, TextLink } from "../components/ui/controls";
 import { AppDialog, AppSheet } from "../components/ui/overlays";
 import { NSH_URL, openExternal, openPremium, REPO_URL, SPOTIFY_URL, TERMS_URL } from "../state/links";
@@ -59,9 +59,10 @@ export function AboutDialog() {
   );
 }
 
-/** While Spotify's login window is open. Escape, back and Cancel cancel it. */
+/** While NetEase login QR code is open. Escape, back and Cancel cancel it. */
 export function SigningInDialog() {
   const open = () => health().status === "signingIn";
+  const h = () => health();
   return (
     <AppDialog
       open={open()}
@@ -73,10 +74,15 @@ export function SigningInDialog() {
     >
       <View class={terminal ? "gap-1" : "items-center gap-4 p-8"}>
         <Text role="header" class="text-xl font-bold text-foreground">
-          Log in to Spotify
+          扫码登录网易云音乐
         </Text>
+        <If when={!terminal && !!h().qrImage}>
+          <View class="items-center justify-center rounded-(--radius-card) border border-border bg-card p-2">
+            <Image src={h().qrImage!} style={{ width: 180, height: 180 }} />
+          </View>
+        </If>
         <Text class="text-center text-sm text-muted-foreground">
-          Log in in the Spotify window, then close it to finish.
+          {h().prompt || "请使用网易云音乐手机 App 扫码并在手机上确认登录"}
         </Text>
         <ActionButton label="Cancel" onPress={cancelSignIn} />
       </View>

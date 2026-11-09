@@ -30,6 +30,14 @@ rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 # prctl/kill/atexit (atexit also on Windows).
 libc = "0.2"
 
+# NetEase Cloud Music protocol & native playback
+aes = "0.8"
+md-5 = "0.10"
+ureq = "3"
+percent-encoding = "2.3"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+rodio = { version = "0.23", default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav", "symphonia-aac", "symphonia-isomp4"] }
+
 # Platform integrations (src/media.rs, src/theme.rs): desktop only.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }

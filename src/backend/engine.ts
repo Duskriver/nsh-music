@@ -41,6 +41,8 @@ function health(native: NativeHealth | null | undefined): Health {
   return {
     status: native?.status ?? "starting",
     error: native?.error ? { code: native.error.code, message: native.error.message } : null,
+    qrImage: native?.qrImage ?? "",
+    prompt: native?.prompt ?? "",
   };
 }
 

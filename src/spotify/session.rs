@@ -10,6 +10,8 @@
 //! the thread as a request of its own ([`Request::Evaluated`]). Every phase
 //! (starting, running, signing in, waiting to retry) handles every request.
 
+#![allow(dead_code)]
+
 use std::{
     collections::HashMap,
     path::Path,
@@ -76,27 +78,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts the session with the real web player.
+    /// Starts the session.
     pub fn start(paths: Paths) -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
-        let (requests, queue) = mpsc::channel();
-        let (out, state) = watch::channel(Snapshot::default());
-        let me = requests.clone();
-        let thread = std::thread::Builder::new()
-            .name("spotish-session".into())
-            .spawn(move || {
-                Runner {
-                    queue,
-                    me,
-                    out,
-                    paths,
-                    bridge: bridge::BUNDLED.to_owned(),
-                    backoff: Backoff::default(),
-                    next_token: 1,
-                }
-                .run()
-            })
-            .expect("the session thread starts");
-        (Session { requests }, state, thread)
+        super::netease::start(paths)
+    }
+
+    /// Creates a session from a request sender.
+    pub fn from_sender(requests: mpsc::Sender<Request>) -> Self {
+        Session { requests }
     }
 
     /// A session that answers from `answer` with no browser (tests, and

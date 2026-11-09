@@ -130,8 +130,24 @@ impl AudioMeter {
         }) else {
             return;
         };
-        let Some(capture) = capture::Capture::start(tx) else { return };
-        inner.borrow_mut().capture = Some(capture);
+        let capture = capture::Capture::start(tx.clone());
+        inner.borrow_mut().capture = capture;
+        let tx_tap = tx.clone();
+        std::thread::Builder::new()
+            .name("netease-meter-tap".into())
+            .spawn(move || {
+                let mut tap_rx = crate::spotify::netease::get_audio_tap().subscribe();
+                let mut analyzer = analysis::Analyzer::new();
+                let mut emitter = analysis::Emitter::new();
+                while let Ok(sample) = tap_rx.blocking_recv() {
+                    analyzer.push(&[sample], 1, |levels| {
+                        if let Some(frame) = emitter.step(levels) {
+                            let _ = tx_tap.send(frame);
+                        }
+                    });
+                }
+            })
+            .ok();
         while let Some(mut frame) = rx.recv().await {
             // Behind: only the newest frame matters.
             while let Ok(newer) = rx.try_recv() {

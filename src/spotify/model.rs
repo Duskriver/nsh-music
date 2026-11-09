@@ -7,10 +7,10 @@
 use std::fmt;
 
 use nsh_core::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A playlist, album, artist, show, Liked Songs or a track shown as a card.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Item {
     /// The Spotify URI (`spotify:playlist:…`).
@@ -33,7 +33,7 @@ impl Item {
 }
 
 /// A track of a list.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Track {
     /// The track's URI (`spotify:track:…`).
@@ -59,7 +59,7 @@ pub struct Track {
 }
 
 /// The header of a collection's page.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Header {
     /// The collection's URI.
@@ -78,7 +78,7 @@ pub struct Header {
 
 /// A playlist, album, artist or Liked Songs: its header, tracks and, for an
 /// artist, releases.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Collection {
     /// What the page's header shows.
@@ -92,7 +92,7 @@ pub struct Collection {
 }
 
 /// A titled row of cards on the home page.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Section {
     /// The row's title.
@@ -102,7 +102,7 @@ pub struct Section {
 }
 
 /// The home page.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Home {
     /// The greeting ("Good morning").
@@ -112,7 +112,7 @@ pub struct Home {
 }
 
 /// What a search found.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SearchResults {
     /// Matching tracks.
@@ -133,7 +133,7 @@ impl SearchResults {
 }
 
 /// The signed-in user's library.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Library {
     /// Its playlists, albums, artists and Liked Songs.
@@ -141,7 +141,7 @@ pub struct Library {
 }
 
 /// The signed-in user.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Me {
     /// The account's stable id (keys per-account caches).
@@ -155,7 +155,7 @@ pub struct Me {
 }
 
 /// A cover's extracted color.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default)]
 pub struct CoverColor {
     /// `#rrggbb`, empty when unknown.
@@ -166,7 +166,7 @@ pub struct CoverColor {
 }
 
 /// A track's lyrics.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default)]
 pub struct Lyrics {
     /// Whether each line has its time (else they are plain words).
@@ -178,7 +178,7 @@ pub struct Lyrics {
 }
 
 /// One line of lyrics.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LyricLine {
     /// When it starts, ms into the track (0 when the lyrics are not timed).
@@ -188,7 +188,7 @@ pub struct LyricLine {
 }
 
 /// How the player repeats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
 #[serde(rename_all = "camelCase")]
 pub enum Repeat {
     /// It stops at the end of the context.
@@ -213,7 +213,7 @@ impl Repeat {
 
 /// The player's state, as the web player's own controls show it (one object
 /// per change).
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Player {
     /// The track's title, empty when nothing is loaded.
@@ -270,7 +270,7 @@ impl Player {
 }
 
 /// Where the session is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
 pub enum HealthStatus {
     /// The browser is starting, or the player loading in it.
     #[default]
@@ -285,7 +285,7 @@ pub enum HealthStatus {
 
 /// What went wrong, by kind. Every rejection's message starts with one
 /// (`"E_TIMEOUT: …"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
 pub enum ErrorCode {
     /// The player has not loaded yet.
     #[default]
@@ -369,7 +369,7 @@ impl ErrorCode {
 
 /// An error with its kind: what `Health.error` holds, and what a rejection's
 /// message says as `"CODE: message"`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, JsObject)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsObject)]
 pub struct EngineError {
     /// The kind (`E_TIMEOUT`, …).
     pub code: ErrorCode,
@@ -419,31 +419,65 @@ impl From<EngineError> for String {
 }
 
 /// Where the session is, as TSX sees it.
-#[derive(Debug, Clone, PartialEq, Default, JsObject)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, JsObject)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Health {
     /// `starting`, `ready`, `signingIn` or `failed`.
     pub status: HealthStatus,
     /// Why, when `status` is `failed` (or when a start failed and is being
     /// retried); null otherwise.
     pub error: Option<EngineError>,
+    /// The QR code image data URI (SVG data URL or empty), when signing in.
+    pub qr_image: String,
+    /// Status message or instructions during QR sign-in.
+    pub prompt: String,
 }
 
 impl Health {
     /// Starting, with no error.
     pub fn starting() -> Health {
-        Health { status: HealthStatus::Starting, error: None }
+        Health {
+            status: HealthStatus::Starting,
+            error: None,
+            qr_image: String::new(),
+            prompt: String::new(),
+        }
     }
     /// Ready.
     pub fn ready() -> Health {
-        Health { status: HealthStatus::Ready, error: None }
+        Health {
+            status: HealthStatus::Ready,
+            error: None,
+            qr_image: String::new(),
+            prompt: String::new(),
+        }
     }
     /// The sign-in window is open.
     pub fn signing_in() -> Health {
-        Health { status: HealthStatus::SigningIn, error: None }
+        Health {
+            status: HealthStatus::SigningIn,
+            error: None,
+            qr_image: String::new(),
+            prompt: String::new(),
+        }
+    }
+    /// The sign-in window or QR code is open with QR image and prompt.
+    pub fn signing_in_qr(qr_image: impl Into<String>, prompt: impl Into<String>) -> Health {
+        Health {
+            status: HealthStatus::SigningIn,
+            error: None,
+            qr_image: qr_image.into(),
+            prompt: prompt.into(),
+        }
     }
     /// Failed with `error`.
     pub fn failed(error: EngineError) -> Health {
-        Health { status: HealthStatus::Failed, error: Some(error) }
+        Health {
+            status: HealthStatus::Failed,
+            error: Some(error),
+            qr_image: String::new(),
+            prompt: String::new(),
+        }
     }
 }
 
