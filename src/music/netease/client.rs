@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,8 @@ const SITE: &str = "https://music.163.com";
 const EAPI: &str = "https://interfacepc.music.163.com";
 const UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
-const EAPI_UA: &str = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
+const EAPI_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.17.204416";
 // Keep cookie names such as MUSIC_U and __csrf intact, as encodeURIComponent does.
 const EAPI_COOKIE_ENCODING: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~')
@@ -65,6 +66,7 @@ pub struct NetEaseClient {
     cookies: Mutex<HashMap<String, String>>,
     profile: Mutex<Option<NetEaseProfile>>,
     agent: ureq::Agent,
+    stream_cache: Mutex<HashMap<u64, (String, Instant)>>,
 }
 
 fn now_millis() -> u64 {
@@ -150,6 +152,7 @@ impl NetEaseClient {
             cookies: Mutex::new(cookies),
             profile: Mutex::new(profile),
             agent,
+            stream_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -177,6 +180,10 @@ impl NetEaseClient {
         {
             let mut profile = self.profile.lock().unwrap();
             *profile = None;
+        }
+        {
+            let mut cache = self.stream_cache.lock().unwrap();
+            cache.clear();
         }
         let _ = fs::remove_file(&self.session_file);
     }
@@ -255,6 +262,10 @@ impl NetEaseClient {
             }
             return Err(EngineError::new(ErrorCode::SignedOut, "网易云登录已失效，请重新登录"));
         }
+        if code == 460 || code == -460 {
+            log::warn!("NetEase {path} returned risk-control code {code}");
+            return Err(EngineError::new(ErrorCode::Internal, format!("460:{code}")));
+        }
         Ok(response)
     }
 
@@ -272,6 +283,11 @@ impl NetEaseClient {
         let resp = if is_eapi {
             let now_m = now_millis();
             let now_s = now_secs();
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos();
+            let rand_val = (nanos / 1000) ^ ((now_m as u32).wrapping_mul(17));
             let mut header_obj = serde_json::Map::new();
             header_obj.insert("osver".into(), json!("Microsoft-Windows-10-Professional-build-19045-64bit"));
             header_obj.insert("deviceId".into(), json!(self.device_id));
@@ -282,7 +298,7 @@ impl NetEaseClient {
             header_obj.insert("buildver".into(), json!(now_s.to_string()));
             header_obj.insert("resolution".into(), json!("1920x1080"));
             header_obj.insert("channel".into(), json!("netease"));
-            header_obj.insert("requestId".into(), json!(format!("{}_{:04}", now_m, now_m % 10000)));
+            header_obj.insert("requestId".into(), json!(format!("{}_{:04}", now_m, rand_val % 10000)));
             header_obj.insert("__csrf".into(), json!(""));
             for (k, v) in &cookies_snapshot {
                 header_obj.insert(k.clone(), json!(v));
@@ -1176,6 +1192,111 @@ impl NetEaseClient {
             provider: "网易云音乐".to_string(),
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamLookup {
+    /// A playable full-track stream URL.
+    Url(String),
+    /// The track is restricted (e.g., VIP trial clip or copyright unavailable);
+    /// querying additional quality tiers on the same endpoint is pointless.
+    Unavailable,
+    /// This quality tier or endpoint returned no URL, so a fallback tier or endpoint may be tried.
+    TryFallback,
+}
+
+fn parse_player_url_response(res: &Value, id_num: u64) -> Result<StreamLookup, EngineError> {
+    let code = res.get("code").and_then(Value::as_i64).unwrap_or(200);
+    if code == 460 || code == -460 {
+        return Err(EngineError::new(ErrorCode::Internal, format!("460:{code}")));
+    }
+
+    let audio_obj = res
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.iter().find(|item| item.get("id").and_then(|v| v.as_u64()) == Some(id_num)));
+
+    let Some(audio) = audio_obj else {
+        return Ok(StreamLookup::TryFallback);
+    };
+
+    if let Some(audio_code) = audio.get("code").and_then(Value::as_i64) {
+        if audio_code == 460 || audio_code == -460 {
+            return Err(EngineError::new(ErrorCode::Internal, format!("460:{audio_code}")));
+        }
+        if audio_code != 200 {
+            return Ok(StreamLookup::Unavailable);
+        }
+    }
+
+    // freeTrialInfo present and not null indicates only a preview clip rather than complete track
+    if let Some(trial) = audio.get("freeTrialInfo") {
+        if !trial.is_null() {
+            return Ok(StreamLookup::Unavailable);
+        }
+    }
+
+    let raw_url = audio.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    if raw_url.is_empty() {
+        return Ok(StreamLookup::TryFallback);
+    }
+
+    let secure_url = if raw_url.starts_with("http://") {
+        raw_url.replacen("http://", "https://", 1)
+    } else {
+        raw_url.to_string()
+    };
+
+    if !secure_url.starts_with("https://") || !secure_url.contains("music.126.net") {
+        return Ok(StreamLookup::TryFallback);
+    }
+
+    Ok(StreamLookup::Url(secure_url))
+}
+
+impl NetEaseClient {
+    fn query_player_url(
+        &self,
+        id_num: u64,
+        level: &str,
+        encode_type: &str,
+        is_eapi: bool,
+    ) -> Result<StreamLookup, EngineError> {
+        let mut params = HashMap::new();
+        params.insert("ids", json!(format!("[{id_num}]")));
+        params.insert("level", json!(level));
+        params.insert("encodeType", json!(encode_type));
+
+        let res = self.request("/api/song/enhance/player/url/v1", &params, is_eapi)?;
+        parse_player_url_response(&res, id_num)
+    }
+
+    fn fetch_stream_url_once(&self, id_num: u64) -> Result<Option<String>, EngineError> {
+        let tiers: &[(&str, &str)] = &[("exhigh", "mp3"), ("standard", "mp3")];
+
+        for &(level, encode_type) in tiers {
+            match self.query_player_url(id_num, level, encode_type, true) {
+                Ok(StreamLookup::Url(url)) => return Ok(Some(url)),
+                Ok(StreamLookup::Unavailable) => return Ok(None),
+                Ok(StreamLookup::TryFallback) => continue,
+                Err(err) if err.message.starts_with("460:") => {
+                    // When EAPI hits risk control 460, try Web API endpoint first (which also refreshes cookies).
+                    match self.query_player_url(id_num, level, encode_type, false) {
+                        Ok(StreamLookup::Url(url)) => return Ok(Some(url)),
+                        Ok(StreamLookup::Unavailable) => return Ok(None),
+                        Ok(StreamLookup::TryFallback) => return Err(err),
+                        Err(web_err) if web_err.message.starts_with("460:") => return Err(web_err),
+                        Err(_) => return Err(err),
+                    }
+                }
+                Err(err) => {
+                    log::warn!("player url query failed for {id_num} at {level}: {err}");
+                    continue;
+                }
+            }
+        }
+        Ok(None)
+    }
 
     /// Fetches audio stream URL (MP3/FLAC) for a track.
     pub fn stream_url(&self, id_or_uri: &str) -> Result<String, EngineError> {
@@ -1184,58 +1305,56 @@ impl NetEaseClient {
             EngineError::new(ErrorCode::NotFound, format!("无效的歌曲 ID: {raw_id}"))
         })?;
 
-        let mut params = HashMap::new();
-        params.insert("ids", json!(format!("[{id_num}]")));
-        params.insert("level", json!("exhigh"));
-        params.insert("encodeType", json!("mp3"));
-
-        let res = self.request("/api/song/enhance/player/url/v1", &params, true)?;
-        let audio_obj = res
-            .get("data")
-            .and_then(|d| d.as_array())
-            .and_then(|arr| arr.iter().find(|item| item.get("id").and_then(|v| v.as_u64()) == Some(id_num)));
-
-        let mut url = audio_obj
-            .and_then(|a| a.get("url"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        // If exhigh returned null/empty, fallback to standard level
-        if url.is_empty() {
-            let mut fallback_params = HashMap::new();
-            fallback_params.insert("ids", json!(format!("[{id_num}]")));
-            fallback_params.insert("level", json!("standard"));
-            fallback_params.insert("encodeType", json!("mp3"));
-            if let Ok(res2) = self.request("/api/song/enhance/player/url/v1", &fallback_params, true) {
-                if let Some(audio_obj2) = res2
-                    .get("data")
-                    .and_then(|d| d.as_array())
-                    .and_then(|arr| arr.iter().find(|item| item.get("id").and_then(|v| v.as_u64()) == Some(id_num)))
-                {
-                    if let Some(u) = audio_obj2.get("url").and_then(|v| v.as_str()) {
-                        url = u.to_string();
-                    }
+        // 1. Check in-memory stream cache
+        {
+            let mut cache = self.stream_cache.lock().unwrap();
+            if let Some((url, at)) = cache.get(&id_num) {
+                if at.elapsed() < Duration::from_secs(600) {
+                    return Ok(url.clone());
                 }
+            }
+            cache.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+        }
+
+        // 2. Fetch with automatic 460 retry
+        let mut final_url = None;
+        for attempt in 0..2 {
+            match self.fetch_stream_url_once(id_num) {
+                Ok(Some(url)) => {
+                    final_url = Some(url);
+                    break;
+                }
+                Ok(None) => break,
+                Err(err) if err.message.starts_with("460:") => {
+                    if attempt == 1 {
+                        return Err(EngineError::new(
+                            ErrorCode::Internal,
+                            "网易云仍拒绝播放请求（460），请稍后再试，并在官方客户端确认该歌曲可正常播放",
+                        ));
+                    }
+                    log::warn!("NetEase returned risk control 460; delaying 1000ms for NMTID renewal");
+                    std::thread::sleep(Duration::from_millis(1000));
+                }
+                Err(err) => return Err(err),
             }
         }
 
-        if url.is_empty() {
+        let Some(url) = final_url else {
             let reason = if !self.is_signed_in() {
                 "该歌曲需要登录或开通 VIP 才能播放，请先扫码登录"
             } else {
                 "该歌曲暂无可用播放地址或需要黑胶 VIP"
             };
             return Err(EngineError::new(ErrorCode::NotFound, reason));
-        }
-
-        let secure_url = if url.starts_with("http://") {
-            url.replacen("http://", "https://", 1)
-        } else {
-            url
         };
 
-        Ok(secure_url)
+        // Cache the resolved URL
+        {
+            let mut cache = self.stream_cache.lock().unwrap();
+            cache.insert(id_num, (url.clone(), Instant::now()));
+        }
+
+        Ok(url)
     }
 
     /// Adds or removes a track from Liked Songs.
@@ -1283,5 +1402,74 @@ mod tests {
 
         client.clear_session();
         fs::remove_dir(data).unwrap();
+    }
+
+    #[test]
+    fn stream_cache_hits_and_clears_with_session() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-cache-{}", std::process::id()));
+        fs::create_dir_all(&data).unwrap();
+        let client = NetEaseClient::new(&data);
+
+        // Prepopulate stream cache
+        let fake_url = "https://m701.music.126.net/fixture.mp3".to_string();
+        client.stream_cache.lock().unwrap().insert(123456, (fake_url.clone(), Instant::now()));
+
+        // Stream url hits cache directly without hitting network
+        assert_eq!(client.stream_url("netease:track:123456").unwrap(), fake_url);
+
+        // Clearing session clears the stream cache
+        client.clear_session();
+        assert!(client.stream_cache.lock().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn player_url_response_distinguishes_vip_restriction_fallback_and_risk_control() {
+        let trial_res = json!({
+            "code": 200,
+            "data": [{
+                "id": 1001,
+                "code": 200,
+                "url": "http://m701.music.126.net/trial.mp3",
+                "freeTrialInfo": { "start": 0, "end": 30 }
+            }]
+        });
+        assert_eq!(parse_player_url_response(&trial_res, 1001), Ok(StreamLookup::Unavailable));
+
+        let no_copyright_res = json!({
+            "code": 200,
+            "data": [{ "id": 1001, "code": 404, "url": null }]
+        });
+        assert_eq!(parse_player_url_response(&no_copyright_res, 1001), Ok(StreamLookup::Unavailable));
+
+        let empty_tier_res = json!({
+            "code": 200,
+            "data": [{ "id": 1001, "code": 200, "url": "" }]
+        });
+        assert_eq!(parse_player_url_response(&empty_tier_res, 1001), Ok(StreamLookup::TryFallback));
+
+        let risk_res = json!({
+            "code": 200,
+            "data": [{ "id": 1001, "code": -460, "url": null }]
+        });
+        assert_eq!(
+            parse_player_url_response(&risk_res, 1001),
+            Err(EngineError::new(ErrorCode::Internal, "460:-460"))
+        );
+
+        let ok_res = json!({
+            "code": 200,
+            "data": [{
+                "id": 1001,
+                "code": 200,
+                "url": "http://m701.music.126.net/full.mp3",
+                "freeTrialInfo": null
+            }]
+        });
+        assert_eq!(
+            parse_player_url_response(&ok_res, 1001),
+            Ok(StreamLookup::Url("https://m701.music.126.net/full.mp3".to_string()))
+        );
     }
 }

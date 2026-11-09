@@ -222,6 +222,8 @@ impl PlayerManager {
 
         // Download audio bytes
         let resp = ureq::get(&stream_url)
+            .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+            .header("Referer", "https://music.163.com/")
             .call()
             .map_err(|e| EngineError::new(ErrorCode::NotFound, format!("failed to stream audio: {e}")))?;
         let bytes = resp
@@ -282,15 +284,23 @@ impl PlayerManager {
             self.play_track(track_to_play, context_href)
         } else {
             // Find the first playable track
+            let has_marked_playable = self.queue.iter().skip(start_index).any(|t| t.playable);
             let mut last_err = None;
             for idx in start_index..self.queue.len() {
+                if has_marked_playable && !self.queue[idx].playable {
+                    continue;
+                }
                 self.queue_index = idx;
                 let track = self.queue[idx].clone();
                 match self.play_track(track, context_href.clone()) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
                         warn!("skip unplayable track: {e}");
+                        let stop_retry = e.code == ErrorCode::Internal || e.code == ErrorCode::SignedOut;
                         last_err = Some(e);
+                        if stop_retry {
+                            break;
+                        }
                     }
                 }
             }
@@ -350,18 +360,31 @@ impl PlayerManager {
             return self.pause();
         };
 
-        // Skip unplayable tracks
+        // Skip unplayable tracks, but stop immediately on risk-control or session errors.
+        let has_marked_playable = self.queue.iter().any(|t| t.playable);
         let mut idx = start_next;
         let mut attempts = 0;
         let mut last_err = None;
         while attempts < len {
+            if has_marked_playable && !self.queue[idx].playable {
+                idx = (idx + 1) % len;
+                attempts += 1;
+                if idx == 0 && self.repeat != Repeat::Context && !self.shuffle {
+                    break;
+                }
+                continue;
+            }
             self.queue_index = idx;
             let track = self.queue[idx].clone();
             match self.play_track(track, self.context_href.clone()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     warn!("failed to play track {} in queue: {e}", self.queue[idx].name);
+                    let stop_retry = e.code == ErrorCode::Internal || e.code == ErrorCode::SignedOut;
                     last_err = Some(e);
+                    if stop_retry {
+                        break;
+                    }
                     idx = (idx + 1) % len;
                     attempts += 1;
                     if idx == 0 && self.repeat != Repeat::Context && !self.shuffle {

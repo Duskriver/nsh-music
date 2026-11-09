@@ -1,8 +1,8 @@
 {
   "name": "nsh-music",
   "id": "io.github.duskriver.nsh-music",
-  "version": "0.1.1",
-  "build": 1,
+  "version": "0.1.2",
+  "build": 2,
   "icon": "icon.png",
   "appearance": "system",
   "theme": "theme.json",
