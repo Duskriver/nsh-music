@@ -24,15 +24,34 @@
 
 ---
 
-## 下载与安装 (macOS)
+## 下载、安装与自动更新 (macOS / Linux / Windows)
 
-### 方式一：下载 DMG 安装包（推荐）
+### 1. 终端一键安装 / 更新（macOS & Linux & Windows）
 
-1. 前往 [GitHub Releases](https://github.com/Duskriver/nsh-music/releases/latest) 下载最新的 **`nsh-music-macos-arm64.dmg`**（适用于 Apple Silicon M 系列芯片 Mac）。
-2. 双击打开 `.dmg` 文件，将 **nsh-music** 图标拖拽到 **Applications（应用程序）** 文件夹即可完成安装。
+无需管理员权限（`sudo`），自动校验 SHA-256 签名并完成安装：
+
+**macOS (Apple Silicon, macOS 14+) / Linux (x86_64, Ubuntu 24.04+ / GTK 4.14+)**：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Duskriver/nsh-music/main/website/public/install.sh | bash
+```
+
+**Windows (x86_64, PowerShell)**：
+
+```powershell
+irm https://raw.githubusercontent.com/Duskriver/nsh-music/main/website/public/install.ps1 | iex
+```
+
+### 2. 手动下载安装包
+
+前往 [GitHub Releases](https://github.com/Duskriver/nsh-music/releases/latest) 下载对应平台的最新安装包：
+
+- **macOS (Apple Silicon)**：`nsh-music-macos-arm64.dmg`（推荐，双击打开拖拽至 `Applications`）或 `nsh-music-macos-arm64.zip`
+- **Linux (x86_64)**：`nsh-music-linux-x86_64.tar.gz`
+- **Windows (x86_64)**：`nsh-music-windows-x86_64.zip`
 
 > [!NOTE]
-> **首次打开若提示「无法验证开发者」或「已损坏」的解决办法**：
+> **macOS 首次打开若提示「无法验证开发者」或「已损坏」的解决办法**：
 >
 > 本项目为开源技术实验项目，未购买商业开发者数字证书，macOS Gatekeeper 安全机制可能会拦截：
 > - **方法 1（推荐）**：打开访达（Finder）中的「应用程序」，**按住 Control 键并右键点击 `nsh-music` 图标**，选择「打开」，在弹出对话框中点击「打开」即可（仅首次需要）。
@@ -42,13 +61,11 @@
 >   xattr -cr /Applications/nsh-music.app
 >   ```
 
-### 方式二：终端一键脚本安装
+### 3. 应用内自动更新
 
-在 macOS 终端中运行：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Duskriver/nsh-music/main/website/public/install.sh | bash
-```
+客户端内置基于 `nsh/updater` 的自动更新机制（配置于 `nsh.json` 的 `"updater": { "github": "Duskriver/nsh-music" }`）：
+- 启动时及每 6 小时自动检查 GitHub Releases 中的 `latest.json`。
+- 发现新版本后，后台自动静默下载并校验对应平台的更新包，下载完成后在右下角弹出 **`nsh-music X.Y.Z is ready.`** 提示，点击 **`Restart`** 即可秒级完成原地替换并重启。
 
 ---
 

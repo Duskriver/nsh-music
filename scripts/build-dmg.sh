@@ -43,16 +43,23 @@ ZIP_OUT="$DIST_DIR/nsh-music-macos-arm64.zip"
 rm -f "$ZIP_OUT"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_OUT"
 
-echo "==> Copying updater tarball if present..."
+echo "==> Copying updater tarball and generating latest.json manifest..."
 cp "$TEMP_BUILD"/nsh-music-*.tar.gz "$DIST_DIR/" 2>/dev/null || true
+UPDATER_ARCHIVES=()
+for f in "$DIST_DIR"/nsh-music-"$VERSION"-*.tar.gz "$DIST_DIR"/nsh-music-"$VERSION"-*.zip; do
+  [ -f "$f" ] && UPDATER_ARCHIVES+=("$f")
+done
+if [ ${#UPDATER_ARCHIVES[@]} -gt 0 ]; then
+  nsh update-manifest "${UPDATER_ARCHIVES[@]}" --out "$DIST_DIR"
+fi
 
 echo "==> Generating SHA-256 checksums..."
 (
   cd "$DIST_DIR"
   if command -v sha256sum > /dev/null; then
-    sha256sum nsh-music-* > sha256sums 2>/dev/null || true
+    sha256sum nsh-music-* latest.json > sha256sums 2>/dev/null || sha256sum nsh-music-* > sha256sums 2>/dev/null || true
   else
-    shasum -a 256 nsh-music-* > sha256sums 2>/dev/null || true
+    shasum -a 256 nsh-music-* latest.json > sha256sums 2>/dev/null || shasum -a 256 nsh-music-* > sha256sums 2>/dev/null || true
   fi
 )
 

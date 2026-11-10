@@ -29,10 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - { target: linux, os: ubuntu-24.04, asset: nsh-music-linux-x86_64.tar.gz, installer: website/public/install.sh }
           - { target: macos, os: macos-15, asset: nsh-music-macos-arm64.zip, installer: website/public/install.sh }
-          # Linux 与 Windows 发布暂时注释（目前专注于 macOS 体验）
-          # - { target: linux, os: ubuntu-24.04, asset: nsh-music-linux-x86_64.tar.gz, installer: website/public/install.sh }
-          # - { target: windows, os: windows-latest, asset: nsh-music-windows-x86_64.zip, installer: website/public/install.ps1 }
+          - { target: windows, os: windows-latest, asset: nsh-music-windows-x86_64.zip, installer: website/public/install.ps1 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

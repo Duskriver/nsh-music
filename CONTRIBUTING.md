@@ -56,15 +56,31 @@ cargo test                             # 仅运行 Rust 单元测试
 
 ---
 
-## 打包与发布 (macOS)
+## 打包、多平台发布与自动更新
 
-制作 macOS 原生 `.dmg` 安装包与 `.zip` 压缩包：
+### 1. GitHub Actions 多平台自动发版（macOS / Linux / Windows）
+
+项目通过 `.github/workflows/release.yml` 实现全平台打包与自动更新清单发布。发版流程如下：
+
+1. 确保 `Cargo.lock` 中的 `nsh-core` 提交哈希与最新的 NSH nightly CLI 一致，并更新 `nsh.json` 与 `Cargo.toml` 中的版本号（如 `0.1.3`）。
+2. 推送版本标签触发构建：
+   ```sh
+   git tag v0.1.3
+   git push origin main --tags
+   ```
+3. GitHub Actions 会并行在 `macos-15`、`ubuntu-24.04` 和 `windows-latest` 上执行 `nsh package`，生成两套产物并执行安装脚本冒烟测试：
+   - **无版本号安装包**（供 `install.sh`、`install.ps1` 与用户手动下载）：`nsh-music-macos-arm64.dmg`、`nsh-music-macos-arm64.zip`、`nsh-music-linux-x86_64.tar.gz`、`nsh-music-windows-x86_64.zip`
+   - **带版本号自更新归档与 `latest.json`**（由 `nsh update-manifest` 汇总三端产物生成，供客户端 `src/platform/updater.ts` 后台下载并一键重启更新）
+
+### 2. 本地打包 (macOS)
+
+在本地制作 macOS 原生 `.dmg` 安装包、`.zip` 压缩包与 `latest.json` 更新清单：
 
 ```sh
 ./scripts/build-dmg.sh [输出目录，默认 dist/]
 ```
 
-脚本会自动使用 `nsh package --target macos` 编译并打包应用，创建包含 `/Applications` 替身的 DMG 镜像，并生成 `sha256sums` 校验和。
+脚本会自动使用 `nsh package --target macos` 编译并打包应用，创建包含 `/Applications` 替身的 DMG 镜像，调用 `nsh update-manifest` 生成 `latest.json`，并输出 `sha256sums` 校验和。
 
 ---
 
