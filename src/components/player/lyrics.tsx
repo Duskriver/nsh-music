@@ -1,14 +1,16 @@
 // The lyrics in Now Playing: the song's lines, the one sung now bright and
 // kept in view as the song moves on, the ones sung already faded. Pressing a
 // line plays from it. Lyrics with no times show as plain words, all alike.
+// With none, the cover can keep their place (`cover`).
 
 import { cleanup, effect, List, type ListRef, reduceMotion, signal, Text, untracked, View } from "nsh";
 import { Button } from "nsh/base";
 import { lineAt, type Lyrics, positionAt } from "../../backend/types";
 import { lyricsQuery } from "../../data/queries";
 import { controlsEnabled, player, seek } from "../../state/player";
-import { focusRing } from "../ui/controls";
+import { Cover, focusRing, terminal } from "../ui/controls";
 import { ErrorState, Spinner } from "../ui/feedback";
+import { enter } from "../ui/motion";
 
 /** How long the lyrics leave the scroll alone after the user scrolls them. */
 const HOLD_MS = 4000;
@@ -26,10 +28,41 @@ function Note(props: { text: string }) {
   );
 }
 
+/** The largest a cover in the lyrics' place grows. */
+const COVER_MAX = 320;
+/** Below this there is no room for a cover: the note alone. */
+const COVER_MIN = 96;
+/** Room the note under the cover takes, with its gap and margins. */
+const CAPTION = 60;
+
+/** No lyrics to show: the cover of what plays in their place, as large as
+ * the room allows, the note quietly under it; the note alone without a
+ * cover, without room for one, or in a terminal. */
+function NoLyrics(props: { text: string; cover?: boolean }) {
+  const room = signal({ width: 0, height: 0 });
+  const size = () => {
+    const { width, height } = room();
+    const fitted = Math.floor(Math.min(COVER_MAX, width - 16, height - CAPTION));
+    return fitted < COVER_MIN ? 0 : fitted;
+  };
+  const shown = () => !!props.cover && !terminal && !!player().artwork && size() > 0;
+  return (
+    <View class="flex-1" onLayout={(e) => room.set({ width: e.bounds.size.width, height: e.bounds.size.height })}>
+      <If when={shown()} else={<Note text={props.text} />}>
+        <View class="flex-1 items-center justify-center gap-4 px-6" testID="lyrics-cover" style={enter("zoomIn", 60)}>
+          <Cover src={player().artwork} size={size()} class="rounded-2xl shadow-xl" />
+          <Text class="text-center text-sm font-semibold text-muted-foreground">{props.text}</Text>
+        </View>
+      </If>
+    </View>
+  );
+}
+
 /** The lyrics of what plays, in every state: none while nothing
  * plays, a spinner while they load, Retry when they don't, a note when the
- * song has none. `large`: a wide window's size. */
-export function LyricsView(props: { large?: boolean }) {
+ * song has none. `large`: a wide window's size. `cover`: the cover in the
+ * lyrics' place when there are none (where it shows nowhere else). */
+export function LyricsView(props: { large?: boolean; cover?: boolean }) {
   const track = () => (player().trackUri);
   const query = lyricsQuery(track);
   // Only the lyrics of this track: the query keeps the last track's while it
@@ -41,7 +74,7 @@ export function LyricsView(props: { large?: boolean }) {
   const failed = () => lyrics() === undefined && query.state() === "errored";
   return (
     <View class="min-h-0 flex-1" testID="lyrics">
-      <If when={track()} else={<Note text="Lyrics show here while a song plays." />}>
+      <If when={track()} else={<NoLyrics text="Lyrics show here while a song plays." cover={props.cover} />}>
         <If
           when={lyrics()}
           else={
@@ -60,7 +93,7 @@ export function LyricsView(props: { large?: boolean }) {
           }
         >
           {(l) => (
-            <If when={l().lines.length > 0} else={<Note text="No lyrics for this song." />}>
+            <If when={l().lines.length > 0} else={<NoLyrics text="No lyrics for this song." cover={props.cover} />}>
               <LyricLines lyrics={l()} large={props.large} />
             </If>
           )}

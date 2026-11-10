@@ -131,10 +131,11 @@ function NowPlayingContent() {
         <If
           when={lyricsBeside()}
           else={
-            // Narrow: the lyrics take the cover's place, over the controls.
+            // Narrow: the lyrics take the cover's place, over the controls;
+            // a song with none keeps its cover there.
             <View class="min-h-0 flex-1 items-center gap-4 px-6 pb-8">
               <View class="min-h-0 w-full max-w-160 flex-1" style={enter("fadeInUp", 60)}>
-                <LyricsView />
+                <LyricsView cover />
               </View>
               <View class="w-full max-w-160 gap-6">{details()}</View>
             </View>

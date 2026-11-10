@@ -12,12 +12,20 @@ import { layout } from "./layout";
 import { terminal } from "./ui/controls";
 import { pageAnimation } from "../nav";
 
-export function AppPage(props: { title: string; testID: string; backdrop?: JSX.Element; children: JSX.Element }) {
+export function AppPage(props: {
+  title: string;
+  testID: string;
+  /** Whether the page is the one shown, on top of the stack (tracked): its
+   * header is the window's header region then (Ctrl+Up). */
+  shown: () => boolean;
+  backdrop?: JSX.Element;
+  children: JSX.Element;
+}) {
   const inside = () => layout() === "desktop" && !terminal;
   return (
     <NavPage
       title={props.title}
-      header={inside() ? undefined : <PageHeader title={props.title} />}
+      header={inside() ? undefined : <PageHeader title={props.title} shown={props.shown} />}
       headerRight={<AccountAction />}
       testID={props.testID}
       animation={pageAnimation()}
@@ -25,7 +33,7 @@ export function AppPage(props: { title: string; testID: string; backdrop?: JSX.E
       <View class={terminal ? "flex-1" : inside() ? "absolute inset-0 bg-sidebar" : "flex-1 bg-sidebar"}>
         <If when={inside()}>
           {props.backdrop}
-          <PageHeader title={props.title} />
+          <PageHeader title={props.title} shown={props.shown} />
         </If>
         {props.children}
       </View>

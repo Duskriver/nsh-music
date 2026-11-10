@@ -12,7 +12,8 @@ import { NSH_URL, openExternal, REPO_URL } from "../../state/links";
 import { setAboutOpen, setDrawerOpen } from "../../state/overlays";
 import { isCurrentContext, isPlayingContext, player } from "../../state/player";
 import { signedIn, signIn, signOut } from "../../state/session";
-import { ActionButton, Cover, focusRing, Hint, IconButton, LAYER, menuItem, popupSurface, terminal } from "../ui/controls";
+import { ActionButton, Cover, focusRing, Hint, IconButton, keyRing, LAYER, menuItem, popupSurface, Pressable, terminal } from "../ui/controls";
+import { createListGroup, createListKeys, KEYS_VIEWABILITY, type ListGroup, type ListKeys } from "../ui/list-keys";
 import { ErrorState, LibrarySkeleton, Reveal } from "../ui/feedback";
 import { Icon, iconMotion, type IconName } from "../ui/icons";
 import { PlayingBars } from "../ui/playing";
@@ -90,22 +91,26 @@ function NavIndicator() {
 }
 
 /** One of the main pages. */
-function NavItem(props: { icon: IconName; label: string; route: Route; compact: boolean }) {
+function NavItem(props: { icon: IconName; label: string; route: Route; compact: boolean; keys: ListKeys; index: number }) {
   const selected = () => currentRoute().name === props.route.name;
   const hover = iconMotion();
   return (
     <View onMouseEnter={() => hover.play(props.icon)}>
-    <Button
+    <Pressable
+      focusable={false}
       accessibilityLabel={props.label}
       selected={selected()}
-      onPress={() => go(props.route)}
+      onPress={() => {
+        props.keys.pressed(props.index);
+        go(props.route);
+      }}
       tooltip={props.compact ? <Hint label={props.label} /> : undefined}
       class={
         terminal
           ? "px-1 focus:bg-muted selected:bg-muted"
           : `group h-11 flex-row items-center gap-3 rounded-(--radius-inset) transition duration-200 ease-out hover:bg-row-hover active:scale-[0.98] motion-reduce:transition-none ${focusRing} ${
               props.compact ? "justify-center" : "px-2"
-            }`
+            } ${props.keys.isActive(props.index) ? keyRing : ""}`
       }
     >
       <If when={!terminal}>
@@ -120,19 +125,19 @@ function NavItem(props: { icon: IconName; label: string; route: Route; compact: 
       <If when={!props.compact || terminal}>
         <Text class={`text-base font-bold ${LAYER} group-hover:translate-x-0.5 ${selected() ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{props.label}</Text>
       </If>
-    </Button>
+    </Pressable>
     </View>
   );
 }
 
 /** One library entry: a cell of the recycling list, so it reads `item()`
  * where it is used. */
-function LibraryRow(props: { item: Item | undefined; compact: boolean; index: number; wave?: ListWave }) {
+function LibraryRow(props: { item: Item | undefined; compact: boolean; index: number; wave?: ListWave; keys?: ListKeys }) {
   // The rows wave in when the library shows; a row scrolled to comes in on
-  // its own (its cover flipping open just after). Made once, here: the
+  // its own (its cover flipping open and its name sliding in just after). Made once, here: the
   // Button re-reads its style with its other props, and a motion made there
   // would play again.
-  const { style: entrance, cover: coverIn } = untracked(() =>
+  const { style: entrance, cover: coverIn, text: textIn } = untracked(() =>
     listItemEntrance({
       wave: props.wave,
       key: () => props.item?.uri ?? "",
@@ -150,10 +155,14 @@ function LibraryRow(props: { item: Item | undefined; compact: boolean; index: nu
   const playingHere = () => isPlayingContext(uri());
   const current = () => isCurrentContext(uri());
   return (
-    <Button
+    <Pressable
+      focusable={!props.keys}
       accessibilityLabel={props.item?.name ?? ""}
       selected={selected()}
-      onPress={() => uri() && go({ name: "collection", uri: uri() })}
+      onPress={() => {
+        props.keys?.pressed(props.index);
+        if (uri()) go({ name: "collection", uri: uri() });
+      }}
       tooltip={props.compact ? <Hint label={props.item?.name ?? ""} /> : undefined}
       style={entrance}
       class={
@@ -161,7 +170,7 @@ function LibraryRow(props: { item: Item | undefined; compact: boolean; index: nu
           ? "flex-row gap-1 px-1 focus:bg-muted selected:bg-muted"
           : `group h-11 flex-row items-center gap-3 rounded-(--radius-inset) px-2 transition duration-200 ease-out hover:bg-row-hover active:scale-[0.98] active:bg-muted motion-reduce:transition-none ${focusRing} ${
               props.compact ? "justify-center" : ""
-            }`
+            } ${props.keys?.isActive(props.index) ? keyRing : ""}`
       }
     >
       <View style={coverIn}>
@@ -175,20 +184,22 @@ function LibraryRow(props: { item: Item | undefined; compact: boolean; index: nu
         />
       </View>
       <If when={!props.compact || terminal}>
-        <Text class={`line-clamp-1 min-w-0 flex-1 text-sm font-medium ${current() ? "text-primary" : "text-foreground"}`}>
-          {props.item?.name ?? ""}
-        </Text>
+        <View class="min-w-0 flex-1" style={textIn}>
+          <Text class={`line-clamp-1 text-sm font-medium ${current() ? "text-primary" : "text-foreground"}`}>
+            {props.item?.name ?? ""}
+          </Text>
+        </View>
         <If when={current() && !terminal}>
           <PlayingBars playing={playingHere()} size={12} />
         </If>
       </If>
-    </Button>
+    </Pressable>
   );
 }
 
 /** The library: the list (signed in), a login prompt (signed out), or
  * skeleton rows while it is not known yet. */
-function LibraryPanel(props: { compact: boolean }) {
+function LibraryPanel(props: { compact: boolean; group?: ListGroup }) {
   const library = libraryQuery();
   // The list's scroll offset, for the selection behind its rows.
   const scroll = createAnimatedValue(0);
@@ -215,8 +226,26 @@ function LibraryPanel(props: { compact: boolean }) {
             // as the skeleton fades when they loaded); rows scrolled to come
             // in on their own.
             const wave = createListWave({ isTop: () => true, afterReveal: !instant });
+            // Below the pages in the sidebar's region; Return opens the
+            // playlist. The keyboard starts at the open one.
+            const keys = createListKeys({
+              count: () => lib().items.length,
+              group: props.group,
+              order: () => 1,
+              activate: (i) => {
+                const item = lib().items[i];
+                if (item) go({ name: "collection", uri: item.uri });
+              },
+              start: selectedIndex,
+            });
             return (
               <List
+                ref={keys.ref}
+                focusable={keys.focusable()}
+                onFocus={keys.onFocus}
+                onBlur={keys.onBlur}
+                onViewableItemsChange={keys.onViewableItemsChange}
+                viewabilityConfig={KEYS_VIEWABILITY}
                 each={lib().items}
                 keyExtractor={(i) => i.uri}
                 estimatedItemSize={48}
@@ -229,7 +258,7 @@ function LibraryPanel(props: { compact: boolean }) {
               >
                 {(item, index) => (
                   <View class="pb-1">
-                    <LibraryRow item={item()} compact={props.compact} index={index()} wave={wave} />
+                    <LibraryRow item={item()} compact={props.compact} index={index()} wave={wave} keys={keys} />
                   </View>
                 )}
               </List>
@@ -423,23 +452,41 @@ export function Account(props: { compact: boolean; placement?: "top" | "bottom";
 /** The whole sidebar; `compact` is the desktop's icon rail. */
 export function Sidebar(props: { compact?: boolean }) {
   const compact = () => (props.compact ?? false) && !terminal;
+  // The pages and the library are one region: one stop of Tab, the arrows
+  // going down through the pages into the library and back.
+  const group = createListGroup({ region: "sidebar" });
+  const routes: Route[] = [{ name: "home" }, { name: "search" }];
+  const showsSearch = () => layout() !== "desktop" || terminal;
+  const nav = createListKeys({
+    count: () => (showsSearch() ? 2 : 1),
+    group,
+    order: () => 0,
+    activate: (i) => go(routes[i]),
+    start: () => (currentRoute().name === "search" && showsSearch() ? 1 : 0),
+  });
   return (
     <View
       role="navigation"
       class={terminal ? "min-h-0 flex-1 gap-1" : "min-h-0 flex-1 gap-2"}
     >
-      <View class={terminal ? "" : `relative gap-1 rounded-(--radius-panel) border border-border bg-card p-2`}>
+      <View
+        ref={nav.ref}
+        focusable={nav.focusable()}
+        onFocus={nav.onFocus}
+        onBlur={nav.onBlur}
+        class={terminal ? "" : `relative gap-1 rounded-(--radius-panel) border border-border bg-card p-2`}
+      >
         <If when={!terminal}>
           <NavIndicator />
         </If>
-        <NavItem icon="home" label="Home" route={{ name: "home" }} compact={compact()} />
+        <NavItem icon="home" label="Home" route={routes[0]} compact={compact()} keys={nav} index={0} />
         {/* The desktop searches from the header's top-right corner; the
             phone's drawer and the terminal keep Search here. */}
-        <If when={layout() !== "desktop" || terminal}>
-          <NavItem icon="search" label="Search" route={{ name: "search" }} compact={compact()} />
+        <If when={showsSearch()}>
+          <NavItem icon="search" label="Search" route={routes[1]} compact={compact()} keys={nav} index={1} />
         </If>
       </View>
-      <LibraryPanel compact={compact()} />
+      <LibraryPanel compact={compact()} group={group} />
       {/* The account: a panel of its own, its row like every other. */}
       <View class={terminal ? "" : "rounded-(--radius-panel) border border-border bg-card p-2"}>
         <Account compact={compact()} />

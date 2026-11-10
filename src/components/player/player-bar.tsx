@@ -2,7 +2,7 @@
 // player and the terminal's status rows. All are made of `parts.tsx`.
 
 import { effect, Text, token, View, windowSize } from "nsh";
-import { Button } from "nsh/base";
+import { Button, Toolbar } from "nsh/base";
 import { openLyrics, setNowPlayingOpen } from "../../state/overlays";
 import { hasTrack, player, toggle } from "../../state/player";
 import { ready } from "../../state/session";
@@ -12,6 +12,7 @@ import { setCoverTint } from "../../state/tint";
 import { lightEffect } from "../../state/visual";
 import { LightMenu } from "./light-menu";
 import { PlayerGlass } from "../ui/toolbar-fx";
+import { Region } from "../ui/regions";
 import { barSize } from "../layout";
 import { enter } from "../ui/motion";
 import { LikeButton, NowPlayingSummary, SeekBar, TransportControls, VolumeControl } from "./parts";
@@ -31,13 +32,18 @@ export function PlayerBar() {
   return (
     <View style={enter("fadeInUp", 120)}>
     <View class={`shadow-xl ${stacked() ? "rounded-[36px]" : "rounded-full"}`}>
+    {/* One stop of Tab, Left and Right between its buttons (the position
+        and the volume are stops of their own). */}
+    <Region.Provider value={{ name: "player" }}>
+    <Toolbar accessibilityLabel="Player">
     <PlayerGlass
       effect={lightEffect()}
       colors={colors()}
       playing={player().playing}
       testID="player"
       radius={stacked() ? 36 : undefined}
-      class={stacked() ? "gap-2 rounded-[36px] px-3.5 pb-2.5 pt-3.5" : "h-18 flex-row items-center justify-between gap-4 rounded-full pl-3.5 pr-5"}
+      // The toolbar around it lays it out in a row: it takes the row's width.
+      class={stacked() ? "flex-1 gap-2 rounded-[36px] px-3.5 pb-2.5 pt-3.5" : "h-18 flex-1 flex-row items-center justify-between gap-4 rounded-full pl-3.5 pr-5"}
     >
       <If
         when={barSize() === "full"}
@@ -101,6 +107,8 @@ export function PlayerBar() {
         </View>
       </If>
     </PlayerGlass>
+    </Toolbar>
+    </Region.Provider>
     </View>
     </View>
   );

@@ -559,145 +559,125 @@ fn glow(p: vec2f, uv: vec2f) -> vec4f {
 }
 `;
 
-// A rhythm game's note highway as wide as the surface: lanes at about a
-// piano key's pitch, white notes (short, and some held long, each a stack
-// of short segments) falling to the bottom. The rhythm shoots them: on each
-// beat a handful of the loud lanes fire a short shot from the bottom at
-// the lane's lowest note, when it has come close. All the light stays down
-// there: a muzzle flash, a short bolt, a flash at the note's lower edge,
-// and sparks carried on the shot's way, up and out past the note's sides.
-// The note is knocked back up a little and settles, keeping its white but
-// brightening a little, segment by segment up from the hit. A different handful each beat, never all
-// of them; each shot plays out over about half a second.
-const RHYTHM = /* wgsl */ `
-const R_LAST = 0.55; // seconds a shot and its hit last
-const R_FIRE = 0.12; // share of that the shot flies; the hit follows
+// Electric current: arcs between floating electrodes. The electrodes sit
+// along the strip the light owns, by turns high and low, drifting; arcs
+// burn between every other one (one to the one after next), so a high
+// pair's arc and a low pair's cross each other on the way, and each
+// electrode carries one arc at a time, never a chain of them (a current
+// never turns a corner). Each arc is a few fine filaments pinched to the
+// two electrodes and wound round one another between them, the whole arc bending in a
+// smooth curve; the filaments are smooth too, each flowing from one shape
+// to the next and flickering on a quick clock of its own. Which pairs burn
+// changes every few seconds, and an arc comes and goes as its part of the
+// spectrum is loud; on the beat they flare and swell. Crisp: hard white
+// cores, anti-aliased, with only a narrow rim of the cover's colour.
+const CURRENT = /* wgsl */ `
+// Smooth noise along x, -1..1.
+fn e_wave(x: f32, seed: f32) -> f32 {
+  let i = floor(x);
+  let f = fract(x);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(hash(vec2f(i, seed)), hash(vec2f(i + 1.0, seed)), u) * 2.0 - 1.0;
+}
 
-// Whether lane l fires on this beat: a handful of lanes, chosen afresh for
-// each beat (its onset the seed, so the choice holds while it plays out),
-// the louder lanes likelier.
-fn r_on(l: f32, n: f32) -> f32 {
-  let v = spectrum((l + 0.5) / n);
-  let pick = hash(vec2f(l * 1.7 + 0.31, uniforms.onset * 3.7));
-  return step(pick, 0.08 + 0.4 * v) * step(uniforms.since, R_LAST);
+// A filament's course at t (0..1 along its arc), flowing from one shape to
+// the next as its clock runs: smooth broad swings with a finer wave on them.
+fn e_flow(t: f32, seed: f32, clk: f32) -> f32 {
+  let k = floor(clk);
+  let f = smoothstep(0.0, 1.0, fract(clk));
+  let s0 = k * 1.37 + seed;
+  let s1 = s0 + 1.37;
+  let c0 = e_wave(t * 3.0, s0) * 0.7 + e_wave(t * 7.0, s0 + 2.0) * 0.3;
+  let c1 = e_wave(t * 3.0, s1) * 0.7 + e_wave(t * 7.0, s1 + 2.0) * 0.3;
+  return mix(c0, c1, f);
+}
+
+// Electrode i: spaced along the strip, by turns high and low, drifting.
+fn e_node(i: f32, gap: f32, room: f32) -> vec2f {
+  let t = uniforms.clock;
+  let high = select(0.28, 0.72, i - 2.0 * floor(i * 0.5) > 0.5);
+  let y = high + 0.16 * sin(t * (0.3 + 0.25 * hash(vec2f(i, 1.0))) + hash(vec2f(i, 2.0)) * 6.28);
+  let x = (i + 0.5 + 0.2 * sin(t * (0.2 + 0.2 * hash(vec2f(i, 3.0))) + i)) * gap;
+  return vec2f(x, room * y);
+}
+
+// The arc's offset across its line at t: the filament's own course inside
+// the bundle, on the whole arc's bow.
+fn e_off(t: f32, bulge: f32, bow: f32, reach: f32, seed: f32, clk: f32) -> f32 {
+  let s = sin(3.14159 * t);
+  return bow * s + bulge * reach * pow(s, 0.8) * e_flow(t, seed, clk);
 }
 
 fn glow(p: vec2f, uv: vec2f) -> vec4f {
-  let room = max(uniforms.reach, 12.0);
-  let n = max(floor(nsh.size.x / clamp(room * 0.16, 16.0, 40.0)), 6.0);
-  let lw = nsh.size.x / n;
-  let x = p.x / lw;
-  let lane = floor(x);
-  let fx = fract(x);
-  let up = nsh.size.y - p.y;
-  let top = room + 6.0;
-  let land = 3.0 + room * 0.04;
-  let fade = smoothstep(top, top * 0.5, up) * step(0.0, up);
-  let px = nsh.scale;
-  let gap = max(1.0, lw * 0.06);
-  let span = room * 0.3 + 8.0;
-  let flow = uniforms.clock * 1.4;
-  // Through the shot, 0..1; the hit's own time once the shot lands.
-  let t = clamp(uniforms.since / R_LAST, 0.0, 1.0);
-  let u = clamp((t - R_FIRE) / (1.0 - R_FIRE), 0.0, 1.0);
-  let landed = step(R_FIRE, t) * step(uniforms.since, R_LAST);
-
-  // The lane's lowest note: the first slot at or above the bottom with a
-  // note in it. Shot only when it has come down close.
-  var aim = vec2f(-1.0, -1.0);
-  for (var i = 0; i < 4; i = i + 1) {
-    let k = floor(flow) + f32(i);
-    let bottom = land + (k - flow) * span;
-    if (aim.x < 0.0 && bottom >= land && hash(vec2f(lane, k)) < 0.28) {
-      aim = vec2f(bottom, k);
+  let h = nsh.size.y;
+  let room = min(max(uniforms.reach, 12.0), h - 2.0);
+  let q = vec2f(p.x, h - p.y);
+  let hot = clamp(1.0 - uniforms.since / 0.3, 0.0, 1.0) * clamp(uniforms.beat * 1.5, 0.0, 1.0);
+  let gap = min(clamp(room * 0.9, 34.0, 130.0), nsh.size.x / 5.0);
+  let count = floor(nsh.size.x / gap);
+  let here = floor(q.x / gap);
+  // Which pairs may burn: two of every four in turn, moving on every few
+  // seconds; so no electrode ever carries two.
+  let turn = floor(uniforms.clock * 0.35);
+  var core = 0.0;
+  var rgb = vec3f(0.0);
+  var rimw = 0.0;
+  for (var dj = -3; dj <= 0; dj = dj + 1) {
+    let i = here + f32(dj);
+    let j = i + 2.0;
+    if (i < 0.0 || j >= count) { continue; }
+    let m = i + 2.0 * turn;
+    if (m - 4.0 * floor(m * 0.25) > 1.5) { continue; }
+    let lid = vec2f(i, 7.0);
+    let a = e_node(i, gap, room);
+    let b = e_node(j, gap, room);
+    let mid = (a.x + b.x) * 0.5 / nsh.size.x;
+    let v = clamp(pow(spectrum(abs(mid - 0.5) * 2.0), 1.1) + uniforms.level * 0.25, 0.0, 1.0);
+    // It comes and goes with the music.
+    let tick = floor(uniforms.clock * (1.0 + hash(lid)) + hash(lid + 0.5) * 5.0);
+    if (hash(vec2f(tick, i)) > 0.55 + 0.4 * v + 0.4 * hot) { continue; }
+    let ab = b - a;
+    let len = max(length(ab), 1.0);
+    let dir = ab / len;
+    let r = q - a;
+    let t = dot(r, dir) / len;
+    let n = r.x * dir.y - r.y * dir.x;
+    let bulge = len * 0.24 * (0.6 + 0.4 * v) * (1.0 + 0.35 * hot);
+    let bow = len * 0.1 * select(-1.0, 1.0, hash(vec2f(tick, i + 0.5)) > 0.5);
+    if (t < -0.05 || t > 1.05 || abs(n) > abs(bow) + bulge + 4.0) { continue; }
+    let tc = clamp(t, 0.0, 1.0);
+    let tn = clamp(tc + 0.01, 0.0, 1.0);
+    let colour = cycle(mid * 0.75);
+    var lit = 0.0;
+    for (var k = 0; k < 4; k = k + 1) {
+      let fid = i * 4.0 + f32(k);
+      let blink = uniforms.clock * (9.0 + 8.0 * hash(vec2f(fid, 1.0)));
+      if (hash(vec2f(floor(blink), fid)) > 0.6 + 0.3 * v + 0.4 * hot) { continue; }
+      let clk = uniforms.clock * (1.5 + 2.0 * hash(vec2f(fid, 2.0))) + hash(vec2f(fid, 3.0)) * 9.0;
+      let reach = 0.3 + 0.7 * (f32(k) + hash(vec2f(fid, 4.0))) / 4.0;
+      let o = e_off(tc, bulge, bow, reach, fid * 3.3, clk);
+      let slope = (e_off(tn, bulge, bow, reach, fid * 3.3, clk) - o) / (0.01 * len);
+      let d = length(vec2f((t - tc) * len, (n - o) / sqrt(1.0 + slope * slope)));
+      let life = 0.6 + 0.4 * (1.0 - fract(blink));
+      let w = 0.5 + 0.2 * v + 0.2 * hot;
+      core = core + clamp((w - d) * nsh.scale + 0.5, 0.0, 1.0) * life;
+      let rr = clamp(1.0 - d / 2.2, 0.0, 1.0) * 0.4 * life;
+      rgb = rgb + colour * rr;
+      rimw = rimw + rr;
+      lit = 1.0;
     }
+    // Its electrodes: small hard points with a little rim.
+    let de = min(length(q - a), length(q - b));
+    core = core + clamp((1.3 + 0.5 * hot - de) * nsh.scale + 0.5, 0.0, 1.0) * lit;
+    let er = clamp(1.0 - de / 5.0, 0.0, 1.0) * 0.45 * lit;
+    rgb = rgb + colour * er;
+    rimw = rimw + er;
   }
-  let armed = r_on(lane, n) * step(0.0, aim.x) * step(aim.x, land + room * 0.3);
-  let hit = armed * landed;
-  // Knocked back: up a little at once, settling back as the beat goes.
-  let knock = hit * min(span * 0.22, 6.0) * smoothstep(0.0, 0.08, u) * (1.0 - u) * (1.0 - u);
-
-  // The notes; the struck one drawn where it is knocked to.
-  var s = (up - land) / span + flow;
-  let moved = (up - knock - land) / span + flow;
-  if (floor(moved) == aim.y && hit > 0.0) { s = moved; }
-  let slot = floor(s);
-  let is_hit = hit * step(aim.y, slot) * step(slot, aim.y);
-  let held = step(hash(vec2f(lane, slot)), 0.28);
-  let len = span * mix(0.18, 0.85, step(0.7, hash(vec2f(slot, lane + 7.0))) * hash(vec2f(lane + 3.0, slot)));
-  let cy = fract(s) * span - len * 0.5;
-  let half = vec2f(lw * 0.5 - gap * 1.5, len * 0.5);
-  let r = min(half.x, 3.0);
-  let q = abs(vec2f((fx - 0.5) * lw, cy)) - half + vec2f(r);
-  let d = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
-  // Each note is a stack of short segments with a hairline between them.
-  let seg = clamp(span * 0.1, 4.0, 8.0);
-  let ly = cy + half.y;
-  let cut = clamp((seg - 1.2 - (ly - seg * floor(ly / seg))) * px + 0.5, 0.0, 1.0);
-  let block = clamp(0.5 - d * px, 0.0, 1.0) * cut * held * step(land, up);
-
-  // The shot, all of it low: a crisp bar at the muzzle, a short bolt up to
-  // the note, a flash along the note's lower edge where it hits.
-  let mid = abs(fx - 0.5) * lw;
-  let muzzle = armed * (1.0 - smoothstep(0.0, 0.1, t))
-    * clamp((lw * 0.3 - mid) * px, 0.0, 1.0) * clamp((1.2 - abs(up - land)) * px, 0.0, 1.0);
-  let head = land + (aim.x - land) * min(t / R_FIRE, 1.0);
-  let tail = max(head - 8.0, land);
-  let bolt = armed * (1.0 - step(R_FIRE, t)) * clamp((max(lw * 0.09, 1.0) - mid) * px + 0.5, 0.0, 1.0)
-    * step(tail, up) * step(up, head) * clamp((up - tail) / max(head - tail, 1.0), 0.3, 1.0);
-  let edge = aim.x + knock;
-  let flash = hit * (1.0 - smoothstep(0.0, 0.5, u))
-    * clamp((lw * 0.48 - mid) * px, 0.0, 1.0) * clamp((2.0 - abs(up - edge)) * px, 0.0, 1.0);
-
-  // Sparks from the hit, carried on the way the shot was going: up and out
-  // past the note's sides, slowing and fading. Drawn for this lane's hit
-  // and its neighbours' (they fly across the lane lines).
-  var sparks = 0.0;
-  var spark_rgb = vec3f(0.0);
-  for (var dl = -1; dl <= 1; dl = dl + 1) {
-    let l = lane + f32(dl);
-    if (l < 0.0 || l >= n) { continue; }
-    var a2 = -1.0;
-    for (var i = 0; i < 4; i = i + 1) {
-      let k = floor(flow) + f32(i);
-      let bottom = land + (k - flow) * span;
-      if (a2 < 0.0 && bottom >= land && hash(vec2f(l, k)) < 0.28) { a2 = bottom; }
-    }
-    let h2 = r_on(l, n) * step(0.0, a2) * step(a2, land + room * 0.3) * landed;
-    if (h2 <= 0.0) { continue; }
-    let c = vec2f((l + 0.5) * lw, a2);
-    let go = 1.0 - (1.0 - u) * (1.0 - u);
-    var sp = 0.0;
-    for (var j = 0; j < 8; j = j + 1) {
-      let h = hash(vec2f(l * 3.1 + f32(j), uniforms.onset * 1.3 + 9.0));
-      // Up and out to one side or the other, never back down.
-      let side = select(-1.0, 1.0, j % 2 == 0);
-      let ang = 1.5708 - side * (0.55 + 0.75 * h);
-      let dist = lw * (0.45 + 0.6 * hash(vec2f(f32(j), l + 5.0))) * go;
-      let at = c + vec2f(cos(ang) * dist, sin(ang) * dist);
-      // Bigger at first, shrinking as they fly.
-      let size = 1.0 + 1.2 * (1.0 - go);
-      sp = sp + clamp((size - length(vec2f(p.x, up) - at)) * px, 0.0, 1.0);
-    }
-    let b = h2 * min(sp, 1.0) * (1.0 - u);
-    sparks = sparks + b;
-    spark_rgb = spark_rgb + b * cycle((l + 0.5) / n * 0.75);
-  }
-
-  // The struck note keeps its white and only brightens a little, segment
-  // by segment up from where it was hit.
-  let colour = cycle((lane + 0.5) / n * 0.75);
-  let si = floor(ly / seg);
-  let front = u * (ceil(len / seg) + 1.0) * 1.4;
-  let hot = is_hit * clamp(front - si - 0.5, 0.0, 1.0);
-  let lead = is_hit * clamp(1.0 - abs(front - si - 0.5) * 2.0, 0.0, 1.0);
-  let wa = block * (0.6 + 0.25 * hot + 0.1 * lead);
-  // The light is the lane's colour (the shot, its flashes, the sparks); the
-  // notes stay white.
-  let ca = bolt * 0.85 + muzzle * 0.7 + flash * 0.9;
-  let a = wa + ca + sparks;
-  let rgb = (vec3f(1.0) * wa + colour * ca + spark_rgb) / max(a, 0.001);
-  return vec4f(rgb, a * fade * (0.6 + 0.4 * uniforms.level));
+  let white = min(core, 1.0);
+  let tint = min(rimw, 0.5);
+  let alpha = white + tint;
+  let col = (vec3f(1.0) * white + rgb / max(rimw, 0.001) * tint) / max(alpha, 0.001);
+  return vec4f(col, alpha * ends(uv) * (0.75 + 0.25 * uniforms.level));
 }
 `;
 
@@ -747,13 +727,13 @@ const LIGHTS = {
   mesh: /* wgsl */ `${HEAD}${TERRAIN}${MESH}${LIGHT_TAIL}`,
   particles: /* wgsl */ `${HEAD}${TERRAIN}${PARTICLES}${LIGHT_TAIL}`,
   strings: /* wgsl */ `${HEAD}${STRINGS}${LIGHT_TAIL}`,
-  rhythm: /* wgsl */ `${HEAD}${RHYTHM}${WHITE_TAIL}`,
+  current: /* wgsl */ `${HEAD}${CURRENT}${WHITE_TAIL}`,
 } as const;
 
 export type ToolbarEffect = keyof typeof LIGHTS;
 
 /** How many of the cover's colours each effect uses (up to four). */
-const COLORS: Record<ToolbarEffect, number> = { spectrum: 3, ribbons: 3, bars: 3, aurora: 3, wave: 3, halo: 3, mountains: 3, mesh: 3, particles: 3, strings: 3, orb: 3, dots: 3, grid: 3, rhythm: 3 };
+const COLORS: Record<ToolbarEffect, number> = { spectrum: 3, ribbons: 3, bars: 3, aurora: 3, wave: 3, halo: 3, mountains: 3, mesh: 3, particles: 3, strings: 3, orb: 3, dots: 3, grid: 3, current: 3 };
 
 /** Each effect's name, for the switch. */
 export const EFFECT_NAMES: Record<ToolbarEffect, string> = {
@@ -770,7 +750,7 @@ export const EFFECT_NAMES: Record<ToolbarEffect, string> = {
   orb: "Orb",
   dots: "Dots",
   grid: "Grid",
-  rhythm: "Rhythm",
+  current: "Current",
 };
 export const TOOLBAR_EFFECTS = Object.keys(LIGHTS) as ToolbarEffect[];
 
@@ -790,7 +770,7 @@ const REACH: Record<ToolbarEffect, number> = {
   particles: 0.9,
   strings: 0.5,
   orb: 1,
-  rhythm: 0.9,
+  current: 0.7,
 };
 
 // The music's numbers among HEAD's uniforms, by slot.

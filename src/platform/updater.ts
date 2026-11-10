@@ -46,14 +46,7 @@
 
 import { openUrl } from "nsh";
 import { isAvailable as canRestart } from "nsh/desktop";
-import {
-  checkForPackage,
-  checkForUpdate,
-  downloadPackage,
-  downloadUpdate,
-  installAndRestart,
-  restartToPackage,
-} from "nsh/updater";
+import * as nshUpdater from "nsh/updater";
 
 /** Where `checkForUpdates` reports what it found. */
 export interface UpdateOptions {
@@ -62,43 +55,68 @@ export interface UpdateOptions {
   notify(message: string, action?: { label: string; run(): void }): void;
 }
 
+/** What `checkForUpdates` uses of `nsh/updater` (tests pass their own). */
+export type Updater = Pick<
+  typeof nshUpdater,
+  "checkForPackage" | "checkForUpdate" | "downloadPackage" | "downloadUpdate" | "installAndRestart" | "restartToPackage"
+>;
+
 let checking = false;
+/** The app version whose archive is downloaded and verified, waiting for
+ * the user's Restart; `undefined` until one is. */
+let downloaded: string | undefined;
 
 /**
  * Checks for a newer build of the app's TSX (downloaded, it runs from the
  * next start; on the desktops the user can restart into it now), and when
- * there is none, for a newer app (offered for download and install, or as
- * a link where it cannot install itself). Resolves when done; never
- * rejects. In development runs and on the web it finds nothing.
+ * there is none, for a newer app. An app this run can install is
+ * downloaded first, as a package is, and offered once it is ready: Restart
+ * then only installs it, a few seconds, rather than starting a download of
+ * a minute or more with nothing on screen that quitting the app abandons.
+ * One that cannot be installed (or downloaded) here is offered as a link.
+ * Resolves when done; never rejects. In development runs and on the web
+ * it finds nothing.
  */
-export async function checkForUpdates(opts: UpdateOptions): Promise<void> {
+export async function checkForUpdates(opts: UpdateOptions, updater: Updater = nshUpdater): Promise<void> {
   if (checking) return;
   checking = true;
   try {
-    const pkg = await checkForPackage();
+    const pkg = await updater.checkForPackage();
     if (pkg) {
-      await downloadPackage();
+      await updater.downloadPackage();
       if (canRestart) {
         opts.notify(`nsh-music ${pkg.version} is ready.`, {
           label: "Restart",
-          run: () => void restartToPackage().catch((e: unknown) => console.warn("update: restart failed:", e)),
+          run: () => void updater.restartToPackage().catch((e: unknown) => console.warn("update: restart failed:", e)),
         });
       }
       return;
     }
-    const app = await checkForUpdate();
+    const app = await updater.checkForUpdate();
     if (!app) return;
     if (app.canInstall) {
-      opts.notify(`nsh-music ${app.version} is available.`, {
-        label: "Update",
-        run: () => void installApp(opts),
-      });
-    } else {
-      opts.notify(`nsh-music ${app.version} is available.`, {
-        label: "Download",
-        run: () => void openUrl(app.url).catch(() => undefined),
-      });
+      // The same version found again keeps its download (`checkForUpdate`):
+      // a later check only offers it again.
+      if (downloaded !== app.version) {
+        try {
+          await updater.downloadUpdate();
+          downloaded = app.version;
+        } catch (error) {
+          console.warn("update: download failed:", error);
+        }
+      }
+      if (downloaded === app.version) {
+        opts.notify(`nsh-music ${app.version} is ready.`, {
+          label: "Restart",
+          run: () => void installApp(app.version, opts, updater),
+        });
+        return;
+      }
     }
+    opts.notify(`nsh-music ${app.version} is available.`, {
+      label: "Download",
+      run: () => void openUrl(app.url).catch(() => undefined),
+    });
   } catch (error) {
     console.warn("update check failed:", error);
   } finally {
@@ -106,12 +124,16 @@ export async function checkForUpdates(opts: UpdateOptions): Promise<void> {
   }
 }
 
-async function installApp(opts: UpdateOptions): Promise<void> {
+async function installApp(version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
+  // Unpacking and checking the new app takes a few seconds before it quits.
+  opts.notify(`Updating to nsh-music ${version}…`);
   try {
-    await downloadUpdate();
-    await installAndRestart(); // Settles only on failure.
+    await updater.installAndRestart(); // Settles only on failure.
   } catch (error) {
     console.warn("update: install failed:", error);
+    // The next check downloads it again (`checkForUpdate` may have
+    // dropped this download for a different archive of the version).
+    if (downloaded === version) downloaded = undefined;
     opts.notify("The update could not be installed.");
   }
 }

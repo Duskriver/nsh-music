@@ -464,8 +464,10 @@ in Now Playing).
   a resting level keeps it alive.
 - **Fourteen effects**, in menu order: Dots (default), Grid, Wave, Orb,
   Spectrum, Bars, Ribbons, Halo, Aurora, Mountains, Mesh, Particles, Strings,
-  Rhythm. Rhythm keeps its notes white (a light grey under the controls'
-  white) and only its brief shots in the cover's hue.
+  Current. Current (arcs of electricity between drifting electrodes) keeps
+  its cores white (a light grey under the controls' white) and only their
+  narrow rims in the cover's hue. Above them, Random picks another effect
+  for each track.
 - **Bounded.** Each effect has its own height in Now Playing (terrains,
   Orb and Aurora fill the room; lines take about half) and never reaches past
   the top of its strip.

@@ -6,6 +6,7 @@ import { batch, signal, Storage } from "nsh";
 
 const nowPlaying = signal(false);
 const about = signal(false);
+const shortcuts = signal(false);
 const drawer = signal(false);
 const firstRun = signal(false);
 const lyrics = signal(false);
@@ -33,6 +34,11 @@ Storage.getItem(LYRICS_SHOWN)
 export const nowPlayingOpen = () => nowPlaying();
 /** Whether About is open (tracked). */
 export const aboutOpen = () => about();
+/** Whether the keyboard shortcuts' help is open (tracked). */
+export const shortcutsOpen = () => shortcuts();
+export function setShortcutsOpen(open: boolean): void {
+  shortcuts.set(open);
+}
 /** Whether the phone's library drawer is open (tracked). */
 export const drawerOpen = () => drawer();
 

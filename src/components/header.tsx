@@ -3,7 +3,8 @@
 // and the account's action.
 
 import { createMotion, signal, Text, token, untracked, View } from "nsh";
-import { Input } from "nsh/base";
+import { Input, Toolbar } from "nsh/base";
+import { Region } from "./ui/regions";
 import { back, canBack, canForward, currentRoute, forward, open, SEARCH } from "../nav";
 import { DISTANCE, DURATION, EASING } from "./ui/tokens";
 import { query } from "../state/search";
@@ -146,7 +147,7 @@ export function TrailingControls() {
  * page's title when `title` shows, and the account's action. Where the
  * title bar holds the controls (`controlsInTitleBar`), only the title, or
  * a little room above the page. */
-export function PageHeader(props: { title: string; showTitle?: boolean }) {
+export function PageHeader(props: { title: string; showTitle?: boolean; shown?: () => boolean }) {
   const desktop = () => layout() === "desktop";
   return (
     <If
@@ -161,11 +162,15 @@ export function PageHeader(props: { title: string; showTitle?: boolean }) {
         </If>
       }
     >
-      <View
+      {/* The window's header region while its page shows (Ctrl+Up): one
+          stop of Tab, Left and Right between its buttons. */}
+      <Region.Provider value={{ name: "header", when: props.shown }}>
+      <Toolbar
+        accessibilityLabel="Header"
         class={
           terminal
-            ? "flex-row items-center gap-1"
-            : "min-h-14 flex-row items-center gap-2 px-4 pt-[env(safe-area-inset-top)]"
+            ? "items-center gap-1"
+            : "min-h-14 items-center gap-2 px-4 pt-[env(safe-area-inset-top)]"
         }
       >
         <NavControls />
@@ -183,7 +188,8 @@ export function PageHeader(props: { title: string; showTitle?: boolean }) {
         <If when={desktop() && !terminal && hasAppWindow}>
           <IconButton name="close" label="Close window" hint onPress={closeMainWindow} />
         </If>
-      </View>
+      </Toolbar>
+      </Region.Provider>
     </If>
   );
 }

@@ -243,3 +243,81 @@ test("the lyrics follow the song, play from a line, and say when there are none"
   await app.press("id:player >> role:button[Lyrics]");
   await app.waitFor("No lyrics for this song.");
 });
+
+test("narrow, a song with no lyrics keeps its cover in their place", async () => {
+  // Covers come with the rich demo; the plain one has none to show.
+  const app = await desktop({ demo: "rich" });
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Salt Lines, 2019 · Low Harbor]");
+  await app.waitFor("role:button[Breakwater, Low Harbor]");
+  await app.press("role:button[Breakwater, Low Harbor]");
+  await app.waitFor("id:player >> role:button[Pause]");
+  await app.press("id:player >> role:button[Lyrics]");
+  await app.waitFor("No lyrics for this song.");
+  // Wide, the cover is beside the lyrics already: not twice.
+  expect(app.shows("id:lyrics-cover")).toBe(false);
+  await app.setViewport(600, 900);
+  await app.waitFor("id:lyrics-cover");
+  expect(app.texts()).toContain("No lyrics for this song.");
+});
+
+test("? shows the keyboard shortcuts", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.keyboard.press("shift+/");
+  await app.waitFor("id:shortcuts");
+  expect(app.texts()).toContain("Keyboard Shortcuts");
+  expect(app.texts()).toContain("Go to the sidebar");
+});
+
+test("Ctrl and the arrows move between regions; the arrows and Return work inside them", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  // The sidebar: Home, then on down into the library, whose first entry is
+  // Liked Songs.
+  await app.keyboard.press("ctrl+left");
+  await app.keyboard.press("down");
+  await app.keyboard.press("enter");
+  await app.waitFor("role:header[Liked Songs]");
+  // The page: its play button first, then down into its tracks; Return
+  // plays the first.
+  await app.keyboard.press("ctrl+right");
+  await app.keyboard.press("down");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:player >> role:button[Pause]");
+});
+
+test("the music light switches to Current, and Random picks another for each track", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Paper Lanterns]");
+  await app.press("role:button[Slow River, The Quiet Fields]");
+  await app.waitFor("id:player >> role:button[Pause]");
+
+  // Current is last on the menu: scrolled to first.
+  await app.press("id:player >> role:button[Light: Dots]");
+  await app.scroll("role:menuitemradio[01 Dots]", 224);
+  await app.press("role:menuitemradio[14 Current]");
+  await app.waitFor("id:player >> role:button[Light: Current]");
+  expect(app.storage()["visual:effect"]).toBe("current");
+
+  // Opened again, the menu starts at the effect in use: Current is there
+  // without a scroll.
+  await app.press("id:player >> role:button[Light: Current]");
+  await app.press("role:menuitemradio[14 Current]");
+  await app.waitFor("id:player >> role:button[Light: Current]");
+
+  // Random picks another effect at once, and says which.
+  const shown = () => ["Spectrum", "Ribbons", "Bars", "Aurora", "Wave", "Halo", "Mountains", "Mesh", "Particles", "Strings", "Orb", "Dots", "Grid", "Current"]
+    .find((name) => app.shows(`id:player >> role:button[Light: Random (${name})]`));
+  await app.press("id:player >> role:button[Light: Current]");
+  await app.press("role:menuitemradio[Random]");
+  await app.waitUntil(() => shown() !== undefined);
+  const first = shown();
+  expect(first).not.toBe("Current");
+  expect(app.storage()["visual:effect"]).toBe("random");
+
+  // The next track brings another.
+  await app.press("id:player >> role:button[Next]");
+  await app.waitUntil(() => shown() !== undefined && shown() !== first);
+});

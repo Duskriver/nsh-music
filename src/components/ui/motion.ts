@@ -27,7 +27,7 @@ import {
   type MotionOptions,
   type MotionSpec,
 } from "nsh";
-import { DISTANCE, DURATION, EASING, SMOOTH_OUT } from "./tokens";
+import { DURATION, EASING } from "./tokens";
 
 /** A style that plays `preset` once when the view mounts; spread it into
  * `style`. Call it in a component body, or on a plain host view whose style
@@ -47,7 +47,7 @@ export function enter(preset: MotionName = "fadeInUp", delay = 0) {
 // timing (`Animated.keyframes` is what a motion runs on each channel).
 
 /** The channels lean motions move, with where each rests. */
-const REST = { opacity: 1, translateX: 0, translateY: 0, rotateY: 0 } as const;
+const REST = { opacity: 1, translateX: 0, translateY: 0, rotateX: 0, rotateY: 0 } as const;
 type LeanChannel = keyof typeof REST;
 
 /** Keyframes of each channel, played with one timing (`MotionSpec`'s
@@ -133,27 +133,40 @@ export function lazyMotion(options?: MotionOptions) {
   };
 }
 
+/** The curve a list's items come in on: a cubic ease-out. Gentler at the
+ * start than `SMOOTH_OUT`, which covers most of the way at once, so the
+ * staircase a wave draws (each item a step behind the one before) stays
+ * readable while it runs. */
+const WAVE_EASE: [number, number, number, number] = [0.33, 1, 0.68, 1];
+
+/** How far a list's items travel as they come in, points (each a little
+ * more or less: `WAVE_VARY`). */
+const WAVE_DISTANCE = 24;
+
 /** An item sliding in along `axis` from `distance` points away (positive:
- * from the right, or from below) while it fades in, on the long smooth-out
- * curve, passing its place by a hair (1pt) before it settles. A row comes in
- * with `translateX` (NSH's `fadeInRight`: right to left), a card with
- * `translateY` (`fadeInUp`); each as one piece. */
+ * from the right, or from below) while it fades in, in one segment. A row comes in with `translateX` (NSH's
+ * `fadeInRight`: right to left), a card with `translateY` (`fadeInUp`); each
+ * as one piece.
+ *
+ * Keyframes ease each segment on its own (as CSS does): an overshoot as a
+ * second segment starts the curve again, so the item all but stops short of
+ * its place and then jumps the rest of the way, a visible hitch. The slide
+ * is one segment; only the fade, which holds once it is in, has two. */
 function slideIn<A extends "translateX" | "translateY">(axis: A, distance: number, duration: number): LeanSpec<"opacity" | A> {
   return {
     tracks: {
       opacity: [
         { offset: 0, value: 0 },
-        { offset: 0.7, value: 1 },
+        { offset: 0.6, value: 1 },
         { offset: 1, value: 1 },
       ],
       [axis]: [
         { offset: 0, value: distance },
-        { offset: 0.7, value: -1 },
         { offset: 1, value: 0 },
       ],
     } as LeanSpec<"opacity" | A>["tracks"],
     duration,
-    easing: SMOOTH_OUT,
+    easing: WAVE_EASE,
   };
 }
 
@@ -180,29 +193,32 @@ export const REVEAL_OUT: MotionSpec = {
   easing: EASING.inOut,
 };
 
-/** The wave lists enter in: each item this long after the one before it
- * (rows top to bottom, cards left to right), unhurried. Only about a
- * screen's worth wait their turn; items past them come in with the last, so
- * the last turn starts within about 1.2s even after a reveal (180 + 11 x 75
- * + 120 = 1125ms). */
+/** The wave lists enter in: each item about a step after the one before it
+ * (rows top to bottom, cards left to right), so the items in motion form a
+ * staircase, uneven (`WAVE_VARY`): items differ in pace, and neighbours now
+ * and then trade places:
+ *
+ *     --
+ *      --
+ *       --
+ *
+ * Only about a screen's worth wait their turn; items past them come in with
+ * the last, so the last turn starts within about 0.6s even after a reveal
+ * (180 + 11 x 36 + 50 = 626ms). */
 export const WAVE = {
   /** Between one item and the next, ms. */
-  step: 55,
+  step: 36,
   /** How many rows down a list take a turn. */
   rows: 12,
   /** How many cards across a row take a turn. */
   cards: 8,
   /** Where an item's wave starts when shown at once (cached). */
-  start: 40,
-  /** The most an item comes in later than its turn, ms: the irregular
-   * rhythm. Over one step and a half, so neighbours can trade places while
-   * the wave still runs top to bottom (or left to right) overall. */
-  jitter: 90,
+  start: 16,
 } as const;
 
 /** A fixed pseudo-random number in 0..1 for item `index` (and `salt`, for
  * independent draws): the same for the same item on every render, so the
- * irregular rhythm never reshuffles. */
+ * small irregularities never reshuffle. */
 function scatter(index: number, salt: number): number {
   let h = Math.imul(index + 1, 0x9e3779b1) ^ Math.imul(salt + 1, 0x85ebca77);
   h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
@@ -210,45 +226,82 @@ function scatter(index: number, salt: number): number {
   return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
 }
 
-/** A wave item's base duration: between `DURATION.slow` (felt too quick)
- * and `DURATION.slower` (too slow). */
-const WAVE_DURATION = Math.round((DURATION.slow + DURATION.slower) / 2);
+/** How much items of a wave differ, so the staircase reads as made by hand,
+ * not by a ruler. Each is a fixed draw per item (`scatter`). */
+const WAVE_VARY = {
+  /** The most an item starts later than its turn, ms: over a step, so now
+   * and then an item starts before the one above it, while the wave still
+   * runs top to bottom (or left to right) overall. */
+  lag: 50,
+  /** Distance, as a share either way (24pt: 19 to 29). */
+  distance: 0.2,
+  /** Duration, as a share either way: some items quicker, some slower. */
+  duration: 0.2,
+} as const;
 
-/** When the item at `index` of a wave of `turns` items starts: its turn plus
- * its own irregular lag. */
-function itemDelay(index: number, turns: number): number {
-  return waveDelay(index, turns) + Math.round(scatter(index, 0) * WAVE.jitter);
-}
+/** `base` moved by up to `share` either way, by draw `t` (0..1). */
+const vary = (base: number, share: number, t: number) => base * (1 - share + 2 * share * t);
+
+/** How long each item of a wave takes to come in. */
+const WAVE_DURATION = DURATION.slow;
 
 /** When items that loaded start their wave: as the skeleton is half gone. */
 export const AFTER_REVEAL = DURATION.slow / 2;
 
 /** How long the item at `index` waits in a wave of `turns` items. */
 export function waveDelay(index: number, turns: number): number {
-  return Math.min(index, turns - 1) * WAVE.step;
+  return waveDelayBy(index, turns, WAVE.step);
 }
 
-/** A cover flipping open (NSH's `flipInY`, in our tokens) over `duration`:
- * it turns from edge-on (90°) to face the viewer about its vertical axis,
- * past by a few degrees before it settles, fading in over the first part of
- * the turn. Turning the other way round: its left edge swings in toward
- * the viewer, following the row as it slides in from the right. */
-function coverFlipSpec(duration: number): LeanSpec<"opacity" | "rotateY"> {
+function waveDelayBy(index: number, turns: number, step: number): number {
+  return Math.min(index, turns - 1) * step;
+}
+
+/** Which way a cover turns as it flips open: about its vertical axis
+ * (`rotateY`) or its horizontal one (`rotateX`), from edge-on on one side
+ * (`from`: 90° or -90°). */
+interface CoverTurn {
+  channel: "rotateX" | "rotateY";
+  from: number;
+}
+
+/** A row's cover turns as the row moves: its left edge swings in toward the
+ * viewer, following the row in from the right. */
+const ROW_TURN: CoverTurn = { channel: "rotateY", from: -90 };
+/** A card's cover turns any of four ways (left, right, up, down), a fixed
+ * draw per card, so a row of cards doesn't flip in step. */
+const CARD_TURNS: CoverTurn[] = [
+  { channel: "rotateY", from: -90 },
+  { channel: "rotateY", from: 90 },
+  { channel: "rotateX", from: 90 },
+  { channel: "rotateX", from: -90 },
+];
+
+/** A cover flipping open (NSH's `flipInY` / `flipInX`, in our tokens) over
+ * `duration`: it turns from edge-on to face the viewer in one segment (an
+ * overshoot would restart the curve: see `slideIn`), fading in over the
+ * first part of the turn. The other axis stays at rest. */
+function coverFlipSpec(turn: CoverTurn, duration: number): LeanSpec<"opacity" | "rotateX" | "rotateY"> {
+  const still = [
+    { offset: 0, value: 0 },
+    { offset: 1, value: 0 },
+  ];
+  const turning = [
+    { offset: 0, value: turn.from },
+    { offset: 1, value: 0 },
+  ];
   return {
     tracks: {
       opacity: [
         { offset: 0, value: 0 },
-        { offset: 0.65, value: 1 },
+        { offset: 0.5, value: 1 },
         { offset: 1, value: 1 },
       ],
-      rotateY: [
-        { offset: 0, value: -90 },
-        { offset: 0.65, value: 8 },
-        { offset: 1, value: 0 },
-      ],
+      rotateX: turn.channel === "rotateX" ? turning : still,
+      rotateY: turn.channel === "rotateY" ? turning : still,
     },
     duration,
-    easing: SMOOTH_OUT,
+    easing: WAVE_EASE,
   };
 }
 
@@ -256,10 +309,18 @@ function coverFlipSpec(duration: number): LeanSpec<"opacity" | "rotateY"> {
  * turn reads as 3D, far enough that its near edge doesn't balloon. */
 const COVER_PERSPECTIVE = 600;
 
-/** How long after its row (or card) starts a cover starts to flip: at
- * least this, plus up to `COVER_LAG_SPREAD` of its own. */
-const COVER_LAG = DURATION.instant;
-const COVER_LAG_SPREAD = 100;
+/** An item comes in in layers, each on its own timeline: the item itself
+ * (the staircase), then its cover's flip and its words' slide, each this
+ * long after the item starts, ms, plus up to `spread` of its own, drawn
+ * apart, so sometimes the cover leads, sometimes the words. */
+const LAYER_LAG = {
+  cover: { base: 30, spread: 100 },
+  text: { base: 50, spread: 110 },
+} as const;
+
+/** How far an item's words travel on top of the item, points (a little more
+ * or less: `WAVE_VARY.distance`). */
+const TEXT_DISTANCE = 10;
 
 /** A terminal draws no motion. */
 const platformTerminal = () => platform.idiom === "terminal";
@@ -269,7 +330,7 @@ const platformTerminal = () => platform.idiom === "terminal";
 // A list's items come in as a wave when its page opens (going back to it in
 // the stack shows it as it was, with nothing coming in), and an item that comes into view later (a
 // row scrolled to, a card scrolled across, new search results) comes in on
-// its own, with only a little jitter. Each item comes in once: a
+// its own (several at once: a short staircase, in order). Each item comes in once: a
 // recycled cell given an item already shown, a re-render or a playback tick
 // does nothing. An item's motions are made once, in its body; an effect on
 // its key and the page's entries plays them.
@@ -277,14 +338,18 @@ const platformTerminal = () => platform.idiom === "terminal";
 /** How long after the page is entered (or the content shows) its items
  * still come in as a wave; items shown after that come in on their own. */
 const OPENING = 900;
-/** The most an item shown later (scrolled to) waits, ms. */
-const LATE_JITTER = 60;
+/** Items shown later (scrolled to) in the same moment come in as a short
+ * staircase of their own: this long apart, ms, the first at once. */
+const LATE_STEP = 16;
+/** How many of them take a turn; the rest come in with the last. */
+const LATE_TURNS = 6;
 
 /** A list's entrances: one per list (a child per card row), made where the
  * list's content is made. */
 export interface ListWave {
-  /** Whether the page has been entered (tracked): 0 while it is not shown
-   * yet, then 1. Going back to it doesn't enter it again. */
+  /** How many times the page has been entered (tracked): 0 while it is not
+   * shown yet, then 1, and one more each time it is opened again (a root
+   * chosen again: `reenter`). Going back to it doesn't enter it again. */
   entry(): number;
   /** Asks to bring item `key` (at `index`) in; `run` gets its delay, ms,
    * after the items asked for in the same moment are put in order. False
@@ -298,20 +363,30 @@ export interface ListWave {
 }
 
 /** Makes a list's wave. `isTop`: whether its page is the one shown
- * (tracked). `afterReveal`: its content took a skeleton's place, so the first
- * wave waits for the skeleton to half fade. */
-export function createListWave(options: { isTop: () => boolean; afterReveal?: boolean }): ListWave {
+ * (tracked). `reenter`: a count (tracked) that goes up each time the page is
+ * opened anew (a root chosen from the sidebar or a tab, even while shown:
+ * `rootOpens`); its items come in again then. `afterReveal`: its content
+ * took a skeleton's place, so the first wave waits for the skeleton to half
+ * fade. */
+export function createListWave(options: { isTop: () => boolean; reenter?: () => number; afterReveal?: boolean }): ListWave {
   const made = Date.now();
-  // Entered once: when it first shows. Going back to it (a pop) shows it
-  // as it was, with nothing coming in again.
+  // Entered when it first shows, and again when it is opened anew while or
+  // as it shows. Going back to it (a pop) shows it as it was, with nothing
+  // coming in again: an opening seen while the page was not shown is taken
+  // as seen, so it does not replay once the page is gone back to.
   const entries = signal(untracked(options.isTop) ? 1 : 0);
+  let seenOpens = untracked(() => options.reenter?.() ?? 0);
   let windowStart = made;
   effect(() => {
-    if (!options.isTop()) return;
+    const top = options.isTop();
+    const opens = options.reenter?.() ?? 0;
     untracked(() => {
-      if (entries() > 0) return;
+      const opened = opens !== seenOpens;
+      seenOpens = opens;
+      if (!top) return;
+      if (entries() > 0 && !opened) return;
       windowStart = Date.now();
-      entries.set(1);
+      entries.set(entries() + 1);
     });
   });
   const start = () => (options.afterReveal && windowStart === made ? AFTER_REVEAL : WAVE.start);
@@ -326,8 +401,8 @@ export function createListWave(options: { isTop: () => boolean; afterReveal?: bo
       batch.forEach((item, rank) => {
         item.run(
           opening
-            ? start() + offset + itemDelay(rank, item.turns)
-            : Math.round(scatter(item.index, 5) * LATE_JITTER),
+            ? start() + offset + waveDelay(rank, item.turns) + Math.round(scatter(item.index, 0) * WAVE_VARY.lag)
+            : waveDelayBy(rank, LATE_TURNS, LATE_STEP),
         );
       });
     };
@@ -352,24 +427,34 @@ export function createListWave(options: { isTop: () => boolean; afterReveal?: bo
   return make(0, { at: 0 });
 }
 
-/** An item's entrance in its list's wave: the item (`axis`: a row slides in
- * right to left, a card rises) and its cover's flip, each at its own fixed
- * pace (`scatter` of its index), played when `key` first shows in an entry.
- * Call it once, in the item's body; bind `style` on the item and `cover` on
- * a view around its cover. Nothing in a terminal or without a wave. */
+/** An item's entrance in its list's wave, in three layers on their own
+ * timelines: the item (`axis`: a row slides in right to left, a card rises),
+ * then its cover's flip and its words' shorter slide, each with its own lag
+ * and pace (`LAYER_LAG`, `WAVE_VARY`: fixed draws per item). A row's cover
+ * turns in from the right; a card's (`turns: WAVE.cards`) any of four ways.
+ * Played when `key` first shows in an entry. Call it once, in the item's
+ * body; bind `style` on the item, `cover` on a view around its cover and
+ * `text` on a view around its words. Nothing in a terminal or without a
+ * wave. */
 export function listItemEntrance(options: {
   wave: ListWave | undefined;
   key: () => string;
   index: () => number;
   axis: "translateX" | "translateY";
   turns: number;
+  /** How its cover turns: `"row"` (in from the right, with the row) or
+   * `"any"` (a card: one of four ways). */
+  coverTurn?: "row" | "any";
 }) {
   const wave = options.wave;
-  if (!wave || platformTerminal()) return { style: undefined, cover: undefined };
+  if (!wave || platformTerminal()) return { style: undefined, cover: undefined, text: undefined };
   const axis = options.axis;
-  // Only the channels that move (`leanMotion`): made once per cell.
+  const anyTurn = options.coverTurn === "any";
+  // Only the channels that move (`leanMotion`): made once per cell. A card's
+  // cover may turn about either axis; a row's only about its vertical one.
   const item = leanMotion(["opacity", axis] as const);
-  const flip = leanMotion(["opacity", "rotateY"] as const);
+  const words = leanMotion(["opacity", axis] as const);
+  const flip = leanMotion<"opacity" | "rotateX" | "rotateY">(anyTurn ? ["opacity", "rotateX", "rotateY"] : ["opacity", "rotateY"]);
   let last = "";
   let lastEntry = -1;
   let seq = 0;
@@ -383,38 +468,51 @@ export function listItemEntrance(options: {
       const ticket = ++seq;
       const index = options.index();
       if (!key) return;
-      const distance = DISTANCE.large * (0.75 + 0.5 * scatter(index, 1));
+      const distance = vary(WAVE_DISTANCE, WAVE_VARY.distance, scatter(index, 1));
+      const textDistance = vary(TEXT_DISTANCE, WAVE_VARY.distance, scatter(index, 6));
+      const turn = anyTurn ? CARD_TURNS[Math.floor(scatter(index, 7) * CARD_TURNS.length)] : ROW_TURN;
       const shown = wave.request(key, index, options.turns, (delay) => {
         if (ticket !== seq) return;
-        const duration = Math.round(WAVE_DURATION * (0.92 + 0.16 * scatter(index, 2)));
-        const lag = COVER_LAG + Math.round(scatter(index, 3) * COVER_LAG_SPREAD);
-        const turn = Math.round(WAVE_DURATION * (0.75 + 0.5 * scatter(index, 4)));
-        item.play(slideIn(axis, distance, duration), delay);
-        flip.play(coverFlipSpec(turn), delay + lag);
+        const pace = (salt: number) => Math.round(vary(WAVE_DURATION, WAVE_VARY.duration, scatter(index, salt)));
+        const lag = (layer: { base: number; spread: number }, salt: number) =>
+          layer.base + Math.round(scatter(index, salt) * layer.spread);
+        item.play(slideIn(axis, distance, pace(2)), delay);
+        flip.play(coverFlipSpec(turn, pace(4)), delay + lag(LAYER_LAG.cover, 3));
+        words.play(slideIn(axis, textDistance, pace(8)), delay + lag(LAYER_LAG.text, 9));
       });
       if (shown) {
-        // Hidden where it starts until its turn comes.
+        // Hidden where each layer starts until its turn comes.
         item.values.opacity.set(0);
         item.values[axis].set(distance);
+        words.values.opacity.set(0);
+        words.values[axis].set(textDistance);
         flip.values.opacity.set(0);
-        flip.values.rotateY.set(-90);
+        flip.values[turn.channel].set(turn.from);
       } else {
         // Shown before in this entry (a cell given it back): at rest.
         item.reset();
+        words.reset();
         flip.reset();
       }
     });
   });
   cleanup(() => {
     item.stop();
+    words.stop();
     flip.stop();
   });
   // As a motion's style binds them; the channels at rest are left out (they
   // change nothing).
-  const slide = item.values[axis];
+  const along = (v: AnimatedValue) => (axis === "translateX" ? { translateX: v } : { translateY: v });
   return {
-    style: { opacity: item.values.opacity, transform: [axis === "translateX" ? { translateX: slide } : { translateY: slide }] },
-    cover: { opacity: flip.values.opacity, transform: [{ perspective: COVER_PERSPECTIVE }, { rotateY: flip.values.rotateY }] },
+    style: { opacity: item.values.opacity, transform: [along(item.values[axis])] },
+    cover: {
+      opacity: flip.values.opacity,
+      transform: anyTurn
+        ? [{ perspective: COVER_PERSPECTIVE }, { rotateX: flip.values.rotateX }, { rotateY: flip.values.rotateY }]
+        : [{ perspective: COVER_PERSPECTIVE }, { rotateY: flip.values.rotateY }],
+    },
+    text: { opacity: words.values.opacity, transform: [along(words.values[axis])] },
   };
 }
 

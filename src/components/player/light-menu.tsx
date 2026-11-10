@@ -1,22 +1,35 @@
-// The music light's menu: the effects, numbered, one line each, the one in
-// use checked (a check on the right); the list scrolls when it is taller
-// than the room. Its trigger
+// The music light's menu, opened at the effect in use: Random first (another effect for each track),
+// set apart by a line, then the effects, numbered, one line each, the one in use checked (a
+// check on the right; under Random, the one it picked carries a faint
+// shuffle mark instead); the list scrolls when it is taller than the room. Its trigger
 // is an icon button (the player bar's, Now Playing's); choosing an effect
 // changes both, and is remembered (`state/visual`).
 
 import { Scroll, signal, Text, View } from "nsh";
-import { Button, Menu, MenuItem } from "nsh/base";
-import { lightEffect, lightName, setLight } from "../../state/visual";
+import { Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
+import { regionItem } from "../ui/regions";
+import { lightEffect, lightName, lightRandom, setLight } from "../../state/visual";
 import { focusRing, Hint, LAYER, menuItem, popupSurface, terminal } from "../ui/controls";
 import { Icon, iconMotion } from "../ui/icons";
 import { menuPopupHidden, menuPopupLeaving, menuPopupStyle } from "../ui/menu";
 import { EFFECT_NAMES, TOOLBAR_EFFECTS, type ToolbarEffect } from "../ui/toolbar-fx";
+
+// A row's height (`menuItem`'s h-8) and the list's (`max-h-72`).
+const ROW = 32;
+const VIEW = 288;
 
 export function LightMenu(props: { placement: "top" | "bottom"; size?: number }) {
   const open = signal(false);
   const hover = iconMotion();
   const size = () => props.size ?? 18;
   const label = () => `Light: ${lightName()}`;
+  // The effects' list: rows of ROW points in a window of VIEW. Where it
+  // starts, so the effect in use is in the middle of it.
+  const openAt = () => {
+    const i = TOOLBAR_EFFECTS.indexOf(lightEffect());
+    const most = Math.max(0, TOOLBAR_EFFECTS.length * ROW - VIEW);
+    return Math.min(most, Math.max(0, i * ROW - (VIEW - ROW) / 2));
+  };
   return (
     <Menu
       open={open()}
@@ -30,6 +43,7 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
       popupEndingStyle={menuPopupLeaving(props.placement, "end")}
       trigger={
         <Button
+          ref={regionItem()}
           accessibilityLabel={label()}
           selected={open()}
           tooltip={open() ? undefined : <Hint label={label()} />}
@@ -61,16 +75,36 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
         </Button>
       }
     >
-      <If when={!terminal}>
-        <Text class="px-2.5 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Music light</Text>
-      </If>
-      {/* Taller than the window allows: the rows scroll under the title. */}
-      <Scroll class="max-h-72">
+      <MenuItem
+        role="menuitemradio"
+        checked={lightRandom()}
+        onSelect={() => setLight("random")}
+        class={terminal ? "px-1 focus:bg-muted" : `group ${menuItem} gap-2.5`}
+        indicatorClass={terminal ? undefined : "hidden"}
+      >
+        {/* In the numbers' column: a shuffle mark, as wide as two digits. */}
+        <If when={!terminal}>
+          <View class="w-[15px] items-start">
+            <Icon name="shuffle" size={12} color="muted-foreground" />
+          </View>
+        </If>
+        <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">Random</Text>
+        <If when={!terminal && lightRandom()}>
+          <Icon name="check" size={12} color="foreground" />
+        </If>
+      </MenuItem>
+      {/* Random apart from the effects, above a line; the effects scroll
+          under it when they are taller than the window allows. */}
+      <MenuSeparator class={terminal ? "hidden" : "-mx-1 my-1 h-px bg-border"} />
+      {/* Opened where the effect in use is, in the middle when it can be
+          (the rows are made afresh on each opening, so this is where each
+          opening starts). */}
+      <Scroll class="max-h-72" contentOffset={{ y: terminal ? 0 : openAt() }}>
       <Each of={TOOLBAR_EFFECTS} key={(e) => e}>
         {(effect) => (
           <MenuItem
             role="menuitemradio"
-            checked={lightEffect() === effect()}
+            checked={!lightRandom() && lightEffect() === effect()}
             onSelect={() => setLight(effect())}
             class={terminal ? "px-1 focus:bg-muted" : `group ${menuItem} gap-2.5`}
             indicatorClass={terminal ? undefined : "hidden"}
@@ -80,8 +114,12 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
             <Text class="font-mono text-xs tabular-nums text-muted-foreground">{String(TOOLBAR_EFFECTS.indexOf(effect()) + 1).padStart(2, "0")}</Text>
             <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{EFFECT_NAMES[effect()]}</Text>
             {/* The one in use: a check on the right. */}
-            <If when={!terminal && lightEffect() === effect()}>
+            <If when={!terminal && !lightRandom() && lightEffect() === effect()}>
               <Icon name="check" size={12} color="foreground" />
+            </If>
+            {/* Random's pick for this track. */}
+            <If when={!terminal && lightRandom() && lightEffect() === effect()}>
+              <Icon name="shuffle" size={12} color="muted-foreground" />
             </If>
           </MenuItem>
         )}

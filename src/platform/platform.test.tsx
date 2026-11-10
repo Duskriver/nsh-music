@@ -7,7 +7,7 @@ import { contrast, mapPalette, mix, parseHex } from "./palette";
 import { needsPlaybackUpdate } from "./media";
 import { trayIcon, trayTitle } from "./desktop";
 import { themeFor } from "./theme";
-import { checkForUpdates } from "./updater";
+import { checkForUpdates, type Updater } from "./updater";
 import { colorScheme, setColorScheme, setTheme, token } from "nsh";
 
 /** Every token theme.json defines a color for. */
@@ -120,5 +120,85 @@ describe("updates", () => {
     const said: string[] = [];
     await checkForUpdates({ notify: (message) => said.push(message) });
     expect(said).toEqual([]);
+  });
+
+  /** An app update of `version` through a fake `nsh/updater`; `steps` gets
+   * each call and message in order. */
+  function fakeUpdater(version: string, steps: string[], fail: { download?: boolean; install?: boolean } = {}): Updater {
+    return {
+      checkForPackage: async () => null,
+      downloadPackage: async () => undefined,
+      restartToPackage: async () => undefined,
+      checkForUpdate: async () => {
+        steps.push("check");
+        return { version, notes: null, url: `https://example.invalid/nsh-music-${version}.tar.gz`, canInstall: true };
+      },
+      downloadUpdate: async () => {
+        steps.push("download");
+        if (fail.download) throw new Error("HTTP 503");
+      },
+      installAndRestart: async () => {
+        steps.push("install");
+        if (fail.install) throw new Error("its code signature is not valid");
+        return new Promise<void>(() => undefined); // Restarts: never settles.
+      },
+    } as unknown as Updater;
+  }
+
+  /** A `notify` that logs into `steps` and keeps the last action. */
+  function recorder(steps: string[]) {
+    const last: { action?: { label: string; run(): void } } = {};
+    return {
+      last,
+      opts: {
+        notify(message: string, action?: { label: string; run(): void }) {
+          steps.push(action ? `${message} [${action.label}]` : message);
+          last.action = action;
+        },
+      },
+    };
+  }
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("an app update is downloaded before it is offered, and Restart only installs it", async () => {
+    const steps: string[] = [];
+    const updater = fakeUpdater("9.0.0", steps);
+    const { last, opts } = recorder(steps);
+    await checkForUpdates(opts, updater);
+    expect(steps).toEqual(["check", "download", "nsh-music 9.0.0 is ready. [Restart]"]);
+    last.action?.run();
+    await settle();
+    expect(steps.slice(3)).toEqual(["Updating to nsh-music 9.0.0…", "install"]);
+  });
+
+  test("a later check offers the downloaded version again without downloading it again", async () => {
+    const steps: string[] = [];
+    const updater = fakeUpdater("9.1.0", steps);
+    const { opts } = recorder(steps);
+    await checkForUpdates(opts, updater);
+    await checkForUpdates(opts, updater);
+    expect(steps.filter((s) => s === "download")).toHaveLength(1);
+    expect(steps.at(-1)).toBe("nsh-music 9.1.0 is ready. [Restart]");
+  });
+
+  test("a download that fails offers the release's page instead", async () => {
+    const steps: string[] = [];
+    const { last, opts } = recorder(steps);
+    await checkForUpdates(opts, fakeUpdater("9.2.0", steps, { download: true }));
+    expect(steps).toEqual(["check", "download", "nsh-music 9.2.0 is available. [Download]"]);
+    expect(last.action?.label).toBe("Download");
+  });
+
+  test("an install that fails says so", async () => {
+    const steps: string[] = [];
+    const { last, opts } = recorder(steps);
+    await checkForUpdates(opts, fakeUpdater("9.3.0", steps, { install: true }));
+    last.action?.run();
+    await settle();
+    expect(steps.slice(3)).toEqual(["Updating to nsh-music 9.3.0…", "install", "The update could not be installed."]);
+    // The next check downloads it again rather than offering what may be gone.
+    await checkForUpdates(opts, fakeUpdater("9.3.0", steps));
+    expect(steps.slice(6)).toEqual(["check", "download", "nsh-music 9.3.0 is ready. [Restart]"]);
   });
 });

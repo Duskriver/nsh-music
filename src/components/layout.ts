@@ -72,3 +72,7 @@ export const wideTracks = () => layout() === "desktop" && windowSize().width > A
 /** The room a page leaves at its end: on the desktops the player floats
  * over the bottom of the pages, so their last rows scroll clear of it. */
 export const pageEnd = () => (layout() !== "desktop" ? "pb-8" : barSize() === "stacked" ? "pb-36" : "pb-28");
+
+/** How much of a page's bottom the floating player covers, points (as
+ * `pageEnd`'s room): what the keyboard scrolls a row clear of. */
+export const playerOverlap = () => (layout() !== "desktop" ? 0 : barSize() === "stacked" ? 144 : 112);

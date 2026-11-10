@@ -9,7 +9,8 @@ import { layout } from "./src/components/layout";
 import { NowPlayingSheet } from "./src/components/player/now-playing";
 import { Toaster } from "./src/components/ui/feedback";
 import { TitleBar } from "./src/components/ui/title-bar";
-import { AboutDialog, FirstRunSheet, SigningInDialog } from "./src/pages/dialogs";
+import { AboutDialog, FirstRunSheet, ShortcutsDialog, SigningInDialog } from "./src/pages/dialogs";
+import { bindRegionKeys } from "./src/components/ui/regions";
 import { DesktopShell } from "./src/shells/desktop";
 import { PhoneShell } from "./src/shells/phone";
 import { TerminalShell } from "./src/shells/terminal";
@@ -20,7 +21,7 @@ import { checkForUpdates } from "./src/platform/updater";
 import { positionAt } from "./src/backend/types";
 import { isDemo } from "./src/state/engine";
 import { announce } from "./src/state/feedback";
-import { setNowPlayingOpen } from "./src/state/overlays";
+import { setNowPlayingOpen, setShortcutsOpen } from "./src/state/overlays";
 import { next, pause, play, player, previous, seek, toggle } from "./src/state/player";
 
 /** How often a long-running app looks for updates again. */
@@ -71,6 +72,9 @@ function Shortcuts() {
   keymap.bind("space", () => toggle(), { when: "notEditing" });
   keymap.bind("mod+shift+right", () => next(), { when: "notEditing" });
   keymap.bind("mod+shift+left", () => previous(), { when: "notEditing" });
+  // Ctrl and an arrow move between the window's regions; `?` lists the keys.
+  bindRegionKeys();
+  keymap.bind("shift+/", () => setShortcutsOpen(true), { when: "notEditing" });
   return <View class="hidden" />;
 }
 
@@ -95,6 +99,7 @@ function App() {
       </If>
       <NowPlayingSheet />
       <AboutDialog />
+      <ShortcutsDialog />
       <SigningInDialog />
       <FirstRunSheet />
       <Toaster bottomOffset={layout() === "desktop" ? 96 : 140} />

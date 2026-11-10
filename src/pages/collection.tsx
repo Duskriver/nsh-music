@@ -3,20 +3,22 @@
 // Each opened collection is a page of its own in the stack, with its own
 // list and scroll position.
 
-import { effect, List, Text, untracked, View } from "nsh";
+import { effect, List, type ListRef, reduceMotion, Text, untracked, View } from "nsh";
 import { type Collection, kindOf } from "../backend/types";
 import { AppPage } from "../components/page";
-import { layout, pageEnd, wideTracks } from "../components/layout";
+import { layout, pageEnd, playerOverlap, wideTracks } from "../components/layout";
 import { CardGrid } from "../components/library/cards";
 import { TrackHeader, TrackRow } from "../components/library/tracks";
 import {
   Cover,
+  keyRing,
   PlayButton,
   SectionTitle,
   terminal,
 } from "../components/ui/controls";
 import { AFTER_REVEAL, createListWave, enter } from "../components/ui/motion";
-import { currentRoute } from "../nav";
+import { createListGroup, createListKeys, KEYS_VIEWABILITY, type ListGroup } from "../components/ui/list-keys";
+import { currentRoute, rootOpens } from "../nav";
 import {
   EmptyState,
   ErrorState,
@@ -24,7 +26,7 @@ import {
   Reveal,
 } from "../components/ui/feedback";
 import { collectionQuery } from "../data/queries";
-import { isPlayingContext, playFrom, rememberTracks, toggleCollection } from "../state/player";
+import { isCurrentTrack, isPlayingContext, playFrom, rememberTracks, toggleCollection } from "../state/player";
 import { ready, signedIn, signIn } from "../state/session";
 
 const KIND_LABEL: Record<string, string> = {
@@ -34,7 +36,7 @@ const KIND_LABEL: Record<string, string> = {
   playlist: "Playlist",
 };
 
-function Header(props: { uri: string; data: Collection; entrance: boolean }) {
+function Header(props: { uri: string; data: Collection; entrance: boolean; group: ListGroup; reveal: () => void }) {
   // Its layers come in one after another: at once when the page shows
   // straight away (cached), else as the skeleton gives way. Made once.
   const start = untracked(() => (props.entrance ? 0 : AFTER_REVEAL));
@@ -49,13 +51,33 @@ function Header(props: { uri: string; data: Collection; entrance: boolean }) {
   const playIn = intro("zoomIn", 330);
   const header = () => props.data.header;
   const phone = () => layout() !== "desktop";
+  const canPlay = () => ready() && props.data.tracks.length > 0;
+  // The play button is the first line of the page's region: Down goes on to
+  // the tracks, Return plays (or pauses).
+  const keys = createListKeys({
+    count: () => 1,
+    axis: "horizontal",
+    group: props.group,
+    order: () => 0,
+    activate: () => canPlay() && toggleCollection(props.uri),
+    reveal: props.reveal,
+  });
   const play = (size: number) => (
-    <PlayButton
-      playing={isPlayingContext(props.uri)}
-      size={size}
-      disabled={!ready() || props.data.tracks.length === 0}
-      onPress={() => toggleCollection(props.uri)}
-    />
+    <View
+      ref={keys.ref}
+      focusable={keys.focusable()}
+      onFocus={keys.onFocus}
+      onBlur={keys.onBlur}
+      class={`rounded-full ${keys.isActive(0) ? keyRing : ""}`}
+    >
+      <PlayButton
+        focusable={false}
+        playing={isPlayingContext(props.uri)}
+        size={size}
+        disabled={!canPlay()}
+        onPress={() => toggleCollection(props.uri)}
+      />
+    </View>
   );
   return (
     <View
@@ -119,17 +141,56 @@ function Tracks(props: { uri: string; data: Collection; instant: boolean }) {
         const route = currentRoute();
         return route.name === "collection" && route.uri === props.uri;
       },
+      // Liked Songs is a root on the phone: its tab chosen again enters it
+      // anew.
+      reenter: rootOpens,
       afterReveal: !props.instant,
     }),
   );
+  const play = (index: number) => {
+    const track = props.data.tracks[index];
+    if (track && ready()) playFrom(props.uri, track.uri, track);
+  };
+  // The list is one stop of Tab; the arrows move through its rows, Return
+  // plays one. The keyboard starts at the playing track when it is here.
+  const group = createListGroup({
+    region: "main",
+    when: () => {
+      const route = currentRoute();
+      return route.name === "collection" && route.uri === props.uri;
+    },
+  });
+  // The header and the releases are the list's own header and footer: it
+  // scrolls to them as they take the focus.
+  let list: ListRef | null = null;
+  const toTop = () => list?.scrollToOffset({ offset: 0, animated: !reduceMotion() });
+  const toEnd = () => list?.scrollToEnd({ animated: !reduceMotion() });
+  const keys = createListKeys({
+    count: () => props.data.tracks.length,
+    group,
+    order: () => 1,
+    activate: play,
+    // Rows are 48pt; the player floats over the bottom of the page.
+    cover: { inset: playerOverlap, itemSize: 48 },
+    start: () => props.data.tracks.findIndex((t) => isCurrentTrack(t.uri)),
+  });
   return (
     <List
       each={props.data.tracks}
       keyExtractor={(t) => t.uid + t.uri}
       estimatedItemSize={48}
+      ref={(n: ListRef) => {
+        list = n;
+        keys.ref(n);
+      }}
+      focusable={keys.focusable()}
+      onFocus={keys.onFocus}
+      onBlur={keys.onBlur}
+      onViewableItemsChange={keys.onViewableItemsChange}
+      viewabilityConfig={KEYS_VIEWABILITY}
       header={() => (
         <View>
-          <Header uri={props.uri} data={props.data} entrance={props.instant} />
+          <Header uri={props.uri} data={props.data} entrance={props.instant} group={group} reveal={toTop} />
           <TrackHeader showAlbum={showAlbum()} />
         </View>
       )}
@@ -138,7 +199,7 @@ function Tracks(props: { uri: string; data: Collection; instant: boolean }) {
           <If when={props.data.releases.length > 0}>
             <View class="gap-2 px-3 pt-8">
               <SectionTitle class="px-3">Discography</SectionTitle>
-              <CardGrid items={props.data.releases} wave={wave} />
+              <CardGrid items={props.data.releases} wave={wave} group={group} order={2} reveal={toEnd} />
             </View>
           </If>
         </View>
@@ -154,10 +215,8 @@ function Tracks(props: { uri: string; data: Collection; instant: boolean }) {
           secondary={artist() ? "album" : "artists"}
           disabled={!ready()}
           wave={wave}
-          onPress={() => {
-            const track = row();
-            if (track) playFrom(props.uri, track.uri, track);
-          }}
+          keys={keys}
+          onPress={() => play(index())}
         />
       )}
     </List>
@@ -190,6 +249,10 @@ export function CollectionPage(props: { uri: string }) {
     <AppPage
       title={title()}
       testID={`page-${props.uri}`}
+      shown={() => {
+        const route = currentRoute();
+        return route.name === "collection" && route.uri === props.uri;
+      }}
     >
       {body()}
     </AppPage>

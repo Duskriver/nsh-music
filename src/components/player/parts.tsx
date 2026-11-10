@@ -4,6 +4,7 @@
 
 import { cleanup, createMotion, effect, type Motion, type MotionSpec, reduceMotion, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
+import { regionItem } from "../ui/regions";
 import { clock } from "../../backend/types";
 import { setNowPlayingOpen } from "../../state/overlays";
 import {
@@ -368,6 +369,7 @@ export function NowPlayingSummary(props: { cover?: number; round?: boolean; open
       }
     >
       <Button
+        ref={regionItem()}
         testID="open-now-playing"
         accessibilityLabel={`Open Now Playing: ${player().title}, ${player().artist}`}
         onPress={() => setNowPlayingOpen(true)}

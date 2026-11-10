@@ -136,13 +136,23 @@ export function open(route: Route): void {
   trimSoon();
 }
 
+/** How many times a root has been opened (tracked): from the sidebar or a
+ * tab, even the one shown. A root's page kept in the stack is entered anew
+ * then (its lists come in again: `createListWave`'s `reenter`); gone back to
+ * with Back, it is not. */
+const rootOpenCount = signal(0);
+export const rootOpens = () => rootOpenCount();
+
 /** Makes `root` (`HOME`, `SEARCH`, `LIKED`) the stack's root: back to it
  * when it is already, else the stack replaced; nothing ahead. */
 export function openRoot(root: Route): void {
-  if (nav.routes().length === 1 && nav.routes()[0] === root) return;
-  intent = { kind: "clear" };
-  if (nav.routes()[0] === root) nav.popToRoot();
-  else nav.setRoutes([root]);
+  batch(() => {
+    rootOpenCount.update((n) => n + 1);
+    if (nav.routes().length === 1 && nav.routes()[0] === root) return;
+    intent = { kind: "clear" };
+    if (nav.routes()[0] === root) nav.popToRoot();
+    else nav.setRoutes([root]);
+  });
 }
 
 /** Whether Back has a page to go to (tracked). */
