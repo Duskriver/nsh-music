@@ -1,10 +1,13 @@
 //! NetEase Cloud Music HTTP API client, EAPI requests, session storage, and QR code login.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,6 +30,14 @@ const EAPI_UA: &str =
 const EAPI_COOKIE_ENCODING: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~')
     .remove(b'*').remove(b'\'').remove(b'(').remove(b')');
+const COOKIE_NAMES: [&str; 3] = ["MUSIC_U", "__csrf", "NMTID"];
+const PROFILE_TTL: Duration = Duration::from_secs(60);
+const LIKED_TTL: Duration = Duration::from_secs(60);
+const COLLECTION_PLAYBACK_TTL: Duration = Duration::from_secs(60);
+const STREAM_TTL: Duration = Duration::from_secs(600);
+const PLAYLIST_PREVIEW_LIMIT: usize = 1000;
+const SONG_DETAIL_BATCH: usize = 400;
+const SONG_DETAIL_CONCURRENCY: usize = 4;
 
 /// A stored NetEase user profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,14 +70,27 @@ pub enum QrPollResult {
     Success,
 }
 
+struct LikedCache {
+    uid: String,
+    ids: Vec<String>,
+    id_set: HashSet<String>,
+    at: Instant,
+}
+
 /// The NetEase API client.
 pub struct NetEaseClient {
     session_file: PathBuf,
     device_id: String,
     cookies: Mutex<HashMap<String, String>>,
+    pending_qr_cookies: Mutex<HashMap<String, String>>,
     profile: Mutex<Option<NetEaseProfile>>,
+    profile_checked_at: Mutex<Option<Instant>>,
     agent: ureq::Agent,
+    download_agent: ureq::Agent,
     stream_cache: Mutex<HashMap<u64, (String, Instant)>>,
+    liked_cache: Mutex<Option<LikedCache>>,
+    liked_playlist_id: Mutex<Option<(String, String)>>,
+    collection_cache: Mutex<HashMap<String, (Collection, Instant)>>,
 }
 
 fn now_millis() -> u64 {
@@ -83,31 +107,256 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+fn generate_device_id() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+
+    let mut hex = String::with_capacity(64);
+    let now = now_millis();
+    let pid = std::process::id();
+    for i in 0..4u64 {
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u64(now);
+        hasher.write_u32(pid);
+        hasher.write_u64(i);
+        let val = hasher.finish();
+        use std::fmt::Write;
+        let _ = write!(&mut hex, "{val:016X}");
+    }
+    hex.truncate(52);
+    hex
+}
+
+fn value_id_str(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() || trimmed == "0" { None } else { Some(trimmed.to_string()) }
+        }
+        Value::Number(n) => n
+            .as_u64()
+            .filter(|&id| id > 0)
+            .map(|id| id.to_string())
+            .or_else(|| n.as_i64().filter(|&id| id > 0).map(|id| id.to_string())),
+        _ => None,
+    }
+}
+
+fn value_id_u64(v: &Value) -> Option<u64> {
+    match v {
+        Value::Number(n) => n.as_u64().or_else(|| n.as_i64().and_then(|id| u64::try_from(id).ok())),
+        Value::String(s) => s.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn valid_positive_id(raw: &str) -> Result<String, EngineError> {
+    let id = raw.trim();
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || id.parse::<u64>().ok().is_none_or(|n| n == 0) {
+        return Err(EngineError::new(ErrorCode::NotFound, "无效的网易云音乐 ID"));
+    }
+    Ok(id.to_string())
+}
+
+fn is_music_126_image_cdn_host(host: &str) -> bool {
+    let Some(rest) = host.strip_prefix('p') else { return false };
+    let Some(digits) = rest.strip_suffix(".music.126.net") else { return false };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_music_126_audio_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "music.126.net" || host.ends_with(".music.126.net")
+}
+
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') || authority.contains(':') {
+        return None;
+    }
+    Some(authority)
+}
+
 fn artwork_url(raw: Option<&str>) -> String {
     let Some(url) = raw else { return String::new() };
-    if url.is_empty() {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
         return String::new();
     }
-    let secure = if url.starts_with("http://") {
-        url.replacen("http://", "https://", 1)
+    let secure = if trimmed.starts_with("http://") {
+        trimmed.replacen("http://", "https://", 1)
     } else {
-        url.to_string()
+        trimmed.to_string()
     };
-    if secure.contains("music.126.net") && !secure.contains("?param=") {
-        format!("{secure}?param=300y300")
-    } else {
-        secure
+    if !secure.starts_with("https://") {
+        return secure;
     }
+    let Some(host) = url_host(&secure) else { return secure };
+    if !is_music_126_image_cdn_host(host) {
+        return secure;
+    }
+
+    let (base_and_query, fragment) = match secure.split_once('#') {
+        Some((before, frag)) => (before, Some(frag)),
+        None => (secure.as_str(), None),
+    };
+    let (base, query) = match base_and_query.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (base_and_query, None),
+    };
+
+    let mut params: Vec<String> = query
+        .into_iter()
+        .flat_map(|q| q.split('&'))
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| {
+            let key = pair.split_once('=').map_or(*pair, |(k, _)| k);
+            key != "param"
+        })
+        .map(ToString::to_string)
+        .collect();
+    params.push("param=300y300".to_string());
+
+    let mut out = format!("{base}?{}", params.join("&"));
+    if let Some(frag) = fragment {
+        out.push('#');
+        out.push_str(frag);
+    }
+    out
+}
+
+fn unix_secs_from_utc(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> Option<i64> {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&min)
+        || !(0..=60).contains(&sec)
+    {
+        return None;
+    }
+    let y = year - if month <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86_400 + hour * 3_600 + min * 60 + sec)
+}
+
+fn parse_month(s: &str) -> Option<i64> {
+    match s.to_ascii_lowercase().as_str() {
+        "jan" => Some(1),
+        "feb" => Some(2),
+        "mar" => Some(3),
+        "apr" => Some(4),
+        "may" => Some(5),
+        "jun" => Some(6),
+        "jul" => Some(7),
+        "aug" => Some(8),
+        "sep" => Some(9),
+        "oct" => Some(10),
+        "nov" => Some(11),
+        "dec" => Some(12),
+        _ => None,
+    }
+}
+
+fn parse_http_date_unix(raw: &str) -> Option<i64> {
+    // Handles IMF-fixdate / RFC 1123 ("Wed, 09 Jun 2027 10:18:14 GMT") and RFC 850 ("Wednesday, 09-Jun-27 10:18:14 GMT").
+    let without_weekday = raw.split_once(',').map_or(raw.trim(), |(_, rest)| rest.trim());
+    let parts: Vec<&str> = without_weekday.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (day, month, year, time_str) = if parts[0].contains('-') {
+        let date_parts: Vec<&str> = parts[0].split('-').collect();
+        if date_parts.len() != 3 {
+            return None;
+        }
+        let d = date_parts[0].parse::<i64>().ok()?;
+        let m = parse_month(date_parts[1])?;
+        let mut y = date_parts[2].parse::<i64>().ok()?;
+        if y < 100 {
+            y += if y >= 70 { 1900 } else { 2000 };
+        }
+        (d, m, y, parts[1])
+    } else {
+        if parts.len() < 4 {
+            return None;
+        }
+        let d = parts[0].parse::<i64>().ok()?;
+        let m = parse_month(parts[1])?;
+        let y = parts[2].parse::<i64>().ok()?;
+        (d, m, y, parts[3])
+    };
+    let mut t = time_str.split(':');
+    let hour = t.next()?.parse::<i64>().ok()?;
+    let min = t.next()?.parse::<i64>().ok()?;
+    let sec = t.next()?.parse::<i64>().ok()?;
+    unix_secs_from_utc(year, month, day, hour, min, sec)
+}
+
+fn apply_set_cookie_header(cookies: &mut HashMap<String, String>, header: &str, now_unix: i64) -> bool {
+    let mut segments = header.split(';');
+    let Some(pair) = segments.next() else { return false };
+    let Some((raw_name, raw_value)) = pair.split_once('=') else { return false };
+    let name = raw_name.trim();
+    if !COOKIE_NAMES.contains(&name) {
+        return false;
+    }
+    let value = raw_value.trim();
+
+    let mut max_age: Option<i64> = None;
+    let mut expires: Option<i64> = None;
+    for attr in segments {
+        let Some((k, v)) = attr.trim().split_once('=') else { continue };
+        if k.trim().eq_ignore_ascii_case("max-age") {
+            if let Ok(secs) = v.trim().parse::<i64>() {
+                max_age = Some(secs);
+            }
+        } else if k.trim().eq_ignore_ascii_case("expires") {
+            if let Some(ts) = parse_http_date_unix(v.trim()) {
+                expires = Some(ts);
+            }
+        }
+    }
+
+    let expired = if let Some(ma) = max_age {
+        ma <= 0
+    } else if let Some(exp) = expires {
+        exp <= now_unix
+    } else {
+        false
+    };
+
+    if value.is_empty() || value == "deleted" || value == "\"\"" || expired {
+        cookies.remove(name).is_some()
+    } else {
+        cookies.insert(name.to_string(), value.to_string()).as_deref() != Some(value)
+    }
+}
+
+fn apply_cookie_str(cookies: &mut HashMap<String, String>, cookie_str: &str) -> bool {
+    let mut changed = false;
+    for raw_item in cookie_str.split(|c| c == ';' || c == '\n') {
+        let part = raw_item.trim();
+        if let Some((k, v)) = part.split_once('=') {
+            let k = k.trim();
+            let v = v.trim();
+            if COOKIE_NAMES.contains(&k) && !v.is_empty() && v != "deleted" && v != "\"\"" {
+                if cookies.insert(k.to_string(), v.to_string()).as_deref() != Some(v) {
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
 }
 
 fn profile_from_response(response: &Value) -> Option<NetEaseProfile> {
     let profile = response.get("profile")?;
-    let user_id = profile.get("userId")?;
-    let id = match user_id {
-        Value::String(id) if !id.is_empty() => id.clone(),
-        Value::Number(id) if id.is_u64() => id.to_string(),
-        _ => return None,
-    };
+    let id = profile.get("userId").and_then(value_id_str)?;
     Some(NetEaseProfile {
         id,
         name: profile.get("nickname").and_then(Value::as_str).unwrap_or("NetEase User").to_string(),
@@ -126,23 +375,28 @@ impl NetEaseClient {
         if let Ok(bytes) = fs::read(&session_file) {
             if let Ok(stored) = serde_json::from_slice::<StoredSession>(&bytes) {
                 cookies = stored.cookies;
+                cookies.retain(|k, v| COOKIE_NAMES.contains(&k.as_str()) && !v.is_empty());
                 device_id = stored.device_id;
                 profile = stored.profile;
             }
         }
 
         if device_id.is_empty() {
-            // Generate a 52-character hex device ID
-            let mut rand_bytes = [0u8; 26];
-            let now = now_millis();
-            for i in 0..rand_bytes.len() {
-                rand_bytes[i] = ((now >> (i % 8)) ^ (i as u64 * 37)) as u8;
-            }
-            device_id = rand_bytes.iter().map(|b| format!("{:02X}", b)).collect();
+            device_id = generate_device_id();
         }
 
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(12)))
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(12)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .into();
+
+        let download_agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_per_read(Some(Duration::from_secs(15)))
+            .timeout_global(Some(Duration::from_secs(60)))
+            .http_status_as_error(false)
             .build()
             .into();
 
@@ -150,9 +404,15 @@ impl NetEaseClient {
             session_file,
             device_id,
             cookies: Mutex::new(cookies),
+            pending_qr_cookies: Mutex::new(HashMap::new()),
             profile: Mutex::new(profile),
+            profile_checked_at: Mutex::new(None),
             agent,
+            download_agent,
             stream_cache: Mutex::new(HashMap::new()),
+            liked_cache: Mutex::new(None),
+            liked_playlist_id: Mutex::new(None),
+            collection_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -171,25 +431,41 @@ impl NetEaseClient {
         cached.or_else(|| self.refresh_profile().ok().flatten())
     }
 
+    fn require_profile(&self) -> Result<NetEaseProfile, EngineError> {
+        if !self.is_signed_in() {
+            return Err(EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"));
+        }
+        let recently_checked = self
+            .profile_checked_at
+            .lock()
+            .unwrap()
+            .is_some_and(|at| at.elapsed() < PROFILE_TTL);
+        if recently_checked {
+            if let Some(cached) = self.profile.lock().unwrap().clone() {
+                return Ok(cached);
+            }
+        }
+        self.refresh_profile()?
+            .ok_or_else(|| EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"))
+    }
+
     /// Clears the login session and removes the stored session file.
     pub fn clear_session(&self) {
-        {
-            let mut cookies = self.cookies.lock().unwrap();
-            cookies.clear();
-        }
-        {
-            let mut profile = self.profile.lock().unwrap();
-            *profile = None;
-        }
-        {
-            let mut cache = self.stream_cache.lock().unwrap();
-            cache.clear();
-        }
+        self.cookies.lock().unwrap().clear();
+        *self.profile.lock().unwrap() = None;
+        *self.profile_checked_at.lock().unwrap() = None;
+        self.stream_cache.lock().unwrap().clear();
+        *self.liked_cache.lock().unwrap() = None;
+        *self.liked_playlist_id.lock().unwrap() = None;
+        self.collection_cache.lock().unwrap().clear();
         let _ = fs::remove_file(&self.session_file);
     }
 
     fn persist_session(&self) {
         let cookies = self.cookies.lock().unwrap().clone();
+        if !cookies.get("MUSIC_U").is_some_and(|v| !v.is_empty()) {
+            return;
+        }
         let profile = self.profile.lock().unwrap().clone();
         let stored = StoredSession {
             cookies,
@@ -211,35 +487,55 @@ impl NetEaseClient {
 
     /// Parses and saves raw cookies from a cookie string or header.
     pub fn save_cookie_str(&self, cookie_str: &str) {
-        let mut lock = self.cookies.lock().unwrap();
-        let mut changed = false;
-        for raw_item in cookie_str.split(|c| c == ';' || c == '\n') {
-            let part = raw_item.trim();
-            if let Some((k, v)) = part.split_once('=') {
-                let k = k.trim();
-                let v = v.trim();
-                if matches!(k, "MUSIC_U" | "__csrf" | "NMTID" | "MUSIC_A")
-                    && !v.is_empty()
-                    && v != "deleted"
-                    && v != "\"\""
-                {
-                    lock.insert(k.to_string(), v.to_string());
-                    changed = true;
-                }
-            }
-        }
-        drop(lock);
+        let changed = {
+            let mut lock = self.cookies.lock().unwrap();
+            apply_cookie_str(&mut lock, cookie_str)
+        };
         if changed {
             self.persist_session();
         }
     }
 
+    #[cfg(test)]
     fn accept_response_cookies(&self, headers: &ureq::http::HeaderMap) {
-        for value in headers.get_all(ureq::http::header::SET_COOKIE) {
-            if let Ok(cookie) = value.to_str() {
-                self.save_cookie_str(cookie);
+        let _ = self.accept_response_cookies_into(headers, &self.cookies, true);
+    }
+
+    fn accept_response_cookies_into(
+        &self,
+        headers: &ureq::http::HeaderMap,
+        target: &Mutex<HashMap<String, String>>,
+        persist_on_change: bool,
+    ) -> Result<(), EngineError> {
+        let now_unix = now_secs() as i64;
+        let (was_signed_in, still_signed_in, changed) = {
+            let mut lock = target.lock().unwrap();
+            let was_signed_in = lock.get("MUSIC_U").is_some_and(|v| !v.is_empty());
+            let mut changed = false;
+            for value in headers.get_all(ureq::http::header::SET_COOKIE) {
+                if let Ok(cookie) = value.to_str() {
+                    if apply_set_cookie_header(&mut lock, cookie, now_unix) {
+                        changed = true;
+                    }
+                }
+            }
+            let still_signed_in = lock.get("MUSIC_U").is_some_and(|v| !v.is_empty());
+            (was_signed_in, still_signed_in, changed)
+        };
+
+        if persist_on_change {
+            if was_signed_in && !still_signed_in {
+                self.clear_session();
+                return Err(EngineError::new(
+                    ErrorCode::SignedOut,
+                    "网易云登录状态已失效，请重新登录",
+                ));
+            }
+            if changed {
+                self.persist_session();
             }
         }
+        Ok(())
     }
 
     /// Executes an HTTP request against the NetEase Web or EAPI endpoint.
@@ -249,16 +545,41 @@ impl NetEaseClient {
         params: &HashMap<&str, Value>,
         is_eapi: bool,
     ) -> Result<Value, EngineError> {
-        let response = self.request_raw(path, params, is_eapi)?;
+        self.request_with_codes(path, params, is_eapi, &[200], &self.cookies, true)
+    }
+
+    fn request_with_codes(
+        &self,
+        path: &str,
+        params: &HashMap<&str, Value>,
+        is_eapi: bool,
+        allowed_codes: &[i64],
+        cookie_jar: &Mutex<HashMap<String, String>>,
+        persist_cookies: bool,
+    ) -> Result<Value, EngineError> {
+        let response = self.request_raw_into(path, params, is_eapi, cookie_jar, persist_cookies)?;
         let code = response.get("code").and_then(Value::as_i64).unwrap_or(200);
+        if allowed_codes.contains(&code) {
+            return Ok(response);
+        }
         if matches!(code, 301 | 302 | 401) {
-            if self.is_signed_in() {
+            if persist_cookies && self.is_signed_in() {
                 // Content can be restricted even while the account is signed in.
-                if !matches!(self.refresh_profile(), Ok(None)) {
-                    log::warn!("NetEase {path} returned code {code}; keeping the login session");
-                    return Err(EngineError::new(ErrorCode::Internal, format!("网易云接口拒绝了请求（{code}）")));
+                match self.refresh_profile() {
+                    Ok(Some(_)) => {
+                        log::warn!("NetEase {path} returned code {code}; keeping the login session");
+                        return Err(EngineError::new(ErrorCode::Internal, "当前账号无权访问该内容"));
+                    }
+                    Ok(None) => {
+                        log::warn!(
+                            "NetEase cleared the login session after {path} returned code {code} and the account check confirmed sign-out"
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!("NetEase {path} returned code {code} and account verification failed: {err}");
+                        return Err(err);
+                    }
                 }
-                log::warn!("NetEase cleared the login session after {path} returned code {code} and the account check confirmed sign-out");
             }
             return Err(EngineError::new(ErrorCode::SignedOut, "网易云登录已失效，请重新登录"));
         }
@@ -266,19 +587,31 @@ impl NetEaseClient {
             log::warn!("NetEase {path} returned risk-control code {code}");
             return Err(EngineError::new(ErrorCode::Internal, format!("460:{code}")));
         }
-        Ok(response)
+        if code == 405 {
+            return Err(EngineError::new(ErrorCode::Internal, "网易云暂时限制了请求，请稍后再试"));
+        }
+        let msg = response
+            .get("message")
+            .or_else(|| response.get("msg"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let detail = match msg {
+            Some(m) => format!("网易云接口返回错误（{code}）：{m}"),
+            None => format!("网易云接口返回错误（{code}）"),
+        };
+        Err(EngineError::new(ErrorCode::Internal, detail))
     }
 
-    fn request_raw(
+    fn request_raw_into(
         &self,
         path: &str,
         params: &HashMap<&str, Value>,
         is_eapi: bool,
+        cookie_jar: &Mutex<HashMap<String, String>>,
+        persist_cookies: bool,
     ) -> Result<Value, EngineError> {
-        let mut cookies_snapshot = self.cookies.lock().unwrap().clone();
-        if cookies_snapshot.contains_key("MUSIC_U") {
-            cookies_snapshot.remove("MUSIC_A");
-        }
+        let cookies_snapshot = cookie_jar.lock().unwrap().clone();
 
         let resp = if is_eapi {
             let now_m = now_millis();
@@ -300,8 +633,12 @@ impl NetEaseClient {
             header_obj.insert("channel".into(), json!("netease"));
             header_obj.insert("requestId".into(), json!(format!("{}_{:04}", now_m, rand_val % 10000)));
             header_obj.insert("__csrf".into(), json!(""));
-            for (k, v) in &cookies_snapshot {
-                header_obj.insert(k.clone(), json!(v));
+            for name in COOKIE_NAMES {
+                if let Some(val) = cookies_snapshot.get(name) {
+                    if !val.is_empty() {
+                        header_obj.insert(name.into(), json!(val));
+                    }
+                }
             }
 
             let mut merged_params = serde_json::Map::new();
@@ -339,8 +676,7 @@ impl NetEaseClient {
                 req = req.header("Cookie", cookie_header);
             }
 
-            req.send(body_str.as_bytes())
-                .map_err(|e| EngineError::new(ErrorCode::Internal, format!("NetEase EAPI network error: {e}")))?
+            req.send(body_str.as_bytes()).map_err(map_ureq_error)?
         } else {
             let mut url = format!("{SITE}{path}");
             let mut query = String::new();
@@ -364,11 +700,15 @@ impl NetEaseClient {
             }
 
             let mut cookie_header = String::new();
-            for (k, v) in &cookies_snapshot {
-                if !cookie_header.is_empty() {
-                    cookie_header.push_str("; ");
+            for name in COOKIE_NAMES {
+                if let Some(v) = cookies_snapshot.get(name) {
+                    if !v.is_empty() {
+                        if !cookie_header.is_empty() {
+                            cookie_header.push_str("; ");
+                        }
+                        cookie_header.push_str(&format!("{name}={v}"));
+                    }
                 }
-                cookie_header.push_str(&format!("{k}={v}"));
             }
 
             let mut req = self.agent.get(&url);
@@ -378,26 +718,50 @@ impl NetEaseClient {
                 req = req.header("Cookie", cookie_header);
             }
 
-            req.call()
-                .map_err(|e| EngineError::new(ErrorCode::Internal, format!("NetEase Web API network error: {e}")))?
+            req.call().map_err(map_ureq_error)?
         };
 
-        self.accept_response_cookies(resp.headers());
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(EngineError::new(
+                ErrorCode::Internal,
+                format!("网易云请求失败（HTTP {}）", status.as_u16()),
+            ));
+        }
 
+        let headers = resp.headers().clone();
         let body_bytes = resp
             .into_body()
+            .into_with_config()
+            .limit(64 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("failed to read response: {e}")))?;
+            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("读取网易云响应失败: {e}")))?;
 
-        serde_json::from_slice(&body_bytes)
-            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("invalid JSON from NetEase: {e}")))
+        let parsed: Value = serde_json::from_slice(&body_bytes)
+            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("网易云返回了无效数据: {e}")))?;
+
+        if !parsed.is_object() {
+            return Err(EngineError::new(ErrorCode::Shape, "网易云返回了无效数据"));
+        }
+
+        self.accept_response_cookies_into(&headers, cookie_jar, persist_cookies)?;
+
+        Ok(parsed)
     }
 
     /// Starts a QR code login flow: returns `(unikey, qr_image_data_uri)`.
     pub fn start_qr_login(&self) -> Result<(String, String), EngineError> {
+        self.pending_qr_cookies.lock().unwrap().clear();
         let mut params = HashMap::new();
         params.insert("type", json!(3));
-        let res = self.request("/api/login/qrcode/unikey", &params, true)?;
+        let res = self.request_with_codes(
+            "/api/login/qrcode/unikey",
+            &params,
+            true,
+            &[200],
+            &self.pending_qr_cookies,
+            false,
+        )?;
         let unikey = res
             .get("unikey")
             .and_then(|v| v.as_str())
@@ -422,35 +786,83 @@ impl NetEaseClient {
         let mut params = HashMap::new();
         params.insert("key", json!(unikey));
         params.insert("type", json!(3));
-        let res = self.request("/api/login/qrcode/client/login", &params, true)?;
+        let res = self.request_with_codes(
+            "/api/login/qrcode/client/login",
+            &params,
+            true,
+            &[800, 801, 802, 803],
+            &self.pending_qr_cookies,
+            false,
+        )?;
         let code = res.get("code").and_then(|v| v.as_i64()).unwrap_or(801);
 
         match code {
-            800 => Ok(QrPollResult::Expired),
+            800 => {
+                self.pending_qr_cookies.lock().unwrap().clear();
+                Ok(QrPollResult::Expired)
+            }
             801 => Ok(QrPollResult::WaitingScan),
             802 => Ok(QrPollResult::ScannedWaitingConfirm),
-            803 => self.finish_qr_login(&res),
+            803 => self.finish_qr_login_from(&self.pending_qr_cookies, &res),
             _ => Ok(QrPollResult::WaitingScan),
         }
     }
 
+    #[cfg(test)]
     fn finish_qr_login(&self, response: &Value) -> Result<QrPollResult, EngineError> {
-        for field in ["cookie", "cookies"] {
-            if let Some(cookie) = response.get(field).and_then(Value::as_str) {
-                self.save_cookie_str(cookie);
+        self.finish_qr_login_from(&self.cookies, response)
+    }
+
+    fn finish_qr_login_from(
+        &self,
+        source_jar: &Mutex<HashMap<String, String>>,
+        response: &Value,
+    ) -> Result<QrPollResult, EngineError> {
+        let mut candidate_cookies = {
+            let mut lock = source_jar.lock().unwrap();
+            for field in ["cookie", "cookies"] {
+                if let Some(cookie) = response.get(field).and_then(Value::as_str) {
+                    apply_cookie_str(&mut lock, cookie);
+                }
             }
-        }
-        if !self.is_signed_in() {
-            return Err(EngineError::new(ErrorCode::SignedOut, "网易云未返回登录凭据，请重新扫码。"));
+            lock.clone()
+        };
+
+        if !candidate_cookies.get("MUSIC_U").is_some_and(|v| !v.is_empty()) {
+            return Err(EngineError::new(
+                ErrorCode::SignedOut,
+                "网易云未返回登录凭据，请重新扫码。",
+            ));
         }
 
-        if let Some(profile) = profile_from_response(response) {
-            *self.profile.lock().unwrap() = Some(profile);
-            self.persist_session();
-        } else if !matches!(self.refresh_profile(), Ok(Some(_))) {
-            self.clear_session();
-            return Err(EngineError::new(ErrorCode::SignedOut, "无法验证网易云账号，请重新扫码。"));
-        }
+        let candidate_jar = Mutex::new(std::mem::take(&mut candidate_cookies));
+        let profile = if let Some(profile) = profile_from_response(response) {
+            profile
+        } else {
+            match self.fetch_profile_from_jar(&candidate_jar, false) {
+                Ok(Some(profile)) => profile,
+                Ok(None) | Err(_) => match self.fetch_profile_from_jar(&candidate_jar, true) {
+                    Ok(Some(profile)) => profile,
+                    _ => {
+                        return Err(EngineError::new(
+                            ErrorCode::SignedOut,
+                            "无法验证网易云账号，请重新扫码。",
+                        ));
+                    }
+                },
+            }
+        };
+
+        let committed_cookies = candidate_jar.into_inner().unwrap();
+        *self.cookies.lock().unwrap() = committed_cookies;
+        self.pending_qr_cookies.lock().unwrap().clear();
+        *self.profile.lock().unwrap() = Some(profile);
+        *self.profile_checked_at.lock().unwrap() = Some(Instant::now());
+        self.stream_cache.lock().unwrap().clear();
+        *self.liked_cache.lock().unwrap() = None;
+        *self.liked_playlist_id.lock().unwrap() = None;
+        self.collection_cache.lock().unwrap().clear();
+        self.persist_session();
         Ok(QrPollResult::Success)
     }
 
@@ -462,13 +874,18 @@ impl NetEaseClient {
         let web = self.request_profile(false);
         let profile = match web {
             Ok(Some(profile)) => Some(profile),
-            web => match self.request_profile(true)? {
-                Some(profile) => Some(profile),
-                None => web?,
+            Ok(None) => match self.request_profile(true) {
+                Ok(p) => p,
+                Err(_) => None,
+            },
+            Err(web_err) => match self.request_profile(true) {
+                Ok(p) => p,
+                Err(_) => return Err(web_err),
             },
         };
         if let Some(profile) = &profile {
             *self.profile.lock().unwrap() = Some(profile.clone());
+            *self.profile_checked_at.lock().unwrap() = Some(Instant::now());
             self.persist_session();
         } else {
             self.clear_session();
@@ -477,224 +894,264 @@ impl NetEaseClient {
     }
 
     fn request_profile(&self, is_eapi: bool) -> Result<Option<NetEaseProfile>, EngineError> {
-        let response = self.request_raw("/api/nuser/account/get", &HashMap::new(), is_eapi)?;
+        self.fetch_profile_from_jar(&self.cookies, is_eapi)
+    }
+
+    fn fetch_profile_from_jar(
+        &self,
+        cookie_jar: &Mutex<HashMap<String, String>>,
+        is_eapi: bool,
+    ) -> Result<Option<NetEaseProfile>, EngineError> {
+        let persist = std::ptr::eq(cookie_jar, &self.cookies);
+        let response = self.request_raw_into("/api/nuser/account/get", &HashMap::new(), is_eapi, cookie_jar, persist)?;
         match response.get("code").and_then(Value::as_i64) {
             Some(301 | 302 | 401) => Ok(None),
             Some(200) if response.get("profile") == Some(&Value::Null) => Ok(None),
             Some(200) => profile_from_response(&response).map(Some).ok_or_else(|| {
                 EngineError::new(ErrorCode::Shape, "网易云未返回有效的账号资料")
             }),
-            code => Err(EngineError::new(ErrorCode::Internal, format!("NetEase account check returned code {code:?}"))),
+            code => Err(EngineError::new(
+                ErrorCode::Internal,
+                format!("NetEase account check returned code {code:?}"),
+            )),
         }
     }
 
     /// Fetches song details by batch from `/api/v3/song/detail`.
     pub fn song_details(&self, ids: &[String]) -> Result<Vec<Track>, EngineError> {
+        self.song_details_with_fallback(ids, &[])
+    }
+
+    fn fetch_song_detail_batch(&self, chunk: &[u64]) -> Result<Value, EngineError> {
+        let c_arr: Vec<Value> = chunk.iter().map(|num| json!({ "id": num })).collect();
+        let mut params = HashMap::new();
+        let c_str = serde_json::to_string(&c_arr).unwrap_or_default();
+        params.insert("c", json!(c_str));
+        self.request("/api/v3/song/detail", &params, true)
+    }
+
+    fn song_details_with_fallback(
+        &self,
+        ids: &[String],
+        originals: &[Value],
+    ) -> Result<Vec<Track>, EngineError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let mut tracks = Vec::with_capacity(ids.len());
 
-        for chunk in ids.chunks(200) {
-            let c_arr: Vec<Value> = chunk
-                .iter()
-                .filter_map(|id| id.parse::<u64>().ok())
-                .map(|num| json!({ "id": num }))
-                .collect();
-            let mut params = HashMap::new();
-            let c_str = serde_json::to_string(&c_arr).unwrap_or_default();
-            params.insert("c", json!(c_str));
+        // Deduplicate numeric IDs for batching while preserving the full `ids` order below.
+        let mut seen_req = HashSet::with_capacity(ids.len());
+        let unique_nums: Vec<u64> = ids
+            .iter()
+            .filter_map(|id| id.parse::<u64>().ok())
+            .filter(|&num| seen_req.insert(num))
+            .collect();
 
-            let res = self.request("/api/v3/song/detail", &params, true)?;
-            let songs = res.get("songs").and_then(|v| v.as_array());
-            let privileges = res.get("privileges").and_then(|v| v.as_array());
+        let chunks: Vec<&[u64]> = unique_nums.chunks(SONG_DETAIL_BATCH).collect();
+        let batch_results: Vec<Result<Value, EngineError>> = if chunks.len() <= 1 {
+            chunks.into_iter().map(|c| self.fetch_song_detail_batch(c)).collect()
+        } else {
+            let next_idx = AtomicUsize::new(0);
+            let slots: Vec<Mutex<Option<Result<Value, EngineError>>>> =
+                (0..chunks.len()).map(|_| Mutex::new(None)).collect();
+            let workers = chunks.len().min(SONG_DETAIL_CONCURRENCY);
+            std::thread::scope(|scope| {
+                for _ in 0..workers {
+                    scope.spawn(|| {
+                        loop {
+                            let idx = next_idx.fetch_add(1, Ordering::Relaxed);
+                            if idx >= chunks.len() {
+                                break;
+                            }
+                            let res = self.fetch_song_detail_batch(chunks[idx]);
+                            *slots[idx].lock().unwrap() = Some(res);
+                        }
+                    });
+                }
+            });
+            slots
+                .into_iter()
+                .map(|slot| {
+                    slot.into_inner()
+                        .unwrap()
+                        .unwrap_or_else(|| Err(EngineError::new(ErrorCode::Internal, "song detail batch failed")))
+                })
+                .collect()
+        };
 
-            let mut priv_map = HashMap::new();
-            if let Some(privs) = privileges {
+        let mut songs_by_id: HashMap<String, Value> = HashMap::with_capacity(unique_nums.len());
+        let mut privs_by_id: HashMap<String, (i64, i64)> = HashMap::with_capacity(unique_nums.len());
+        for res in batch_results {
+            let res = res?;
+            if let Some(privs) = res.get("privileges").and_then(Value::as_array) {
                 for p in privs {
-                    if let Some(id) = p.get("id").and_then(|v| v.as_i64()) {
-                        let st = p.get("st").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let pl = p.get("pl").and_then(|v| v.as_i64()).unwrap_or(0);
-                        priv_map.insert(id, (st, pl));
+                    if let Some(id) = p.get("id").and_then(value_id_str) {
+                        let st = p.get("st").and_then(Value::as_i64).unwrap_or(0);
+                        let pl = p.get("pl").and_then(Value::as_i64).unwrap_or(0);
+                        privs_by_id.insert(id, (st, pl));
                     }
                 }
             }
-
-            if let Some(songs) = songs {
+            if let Some(songs) = res.get("songs").and_then(Value::as_array) {
                 for s in songs {
-                    let id_val = s.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let id_str = id_val.to_string();
-                    let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-                    let artists = s
-                        .get("ar")
-                        .or_else(|| s.get("artists"))
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
-                        .unwrap_or_default();
-
-                    let album_obj = s.get("al").or_else(|| s.get("album"));
-                    let album = album_obj
-                        .and_then(|a| a.get("name").and_then(|n| n.as_str()))
-                        .unwrap_or("")
-                        .to_string();
-                    let album_id = album_obj
-                        .and_then(|a| a.get("id").map(|v| v.to_string()))
-                        .unwrap_or_default();
-                    let album_uri = if album_id.is_empty() {
-                        String::new()
-                    } else {
-                        format!("netease:album:{album_id}")
-                    };
-                    let image = artwork_url(album_obj.and_then(|a| a.get("picUrl").and_then(|p| p.as_str())));
-
-                    let duration_ms = s
-                        .get("dt")
-                        .or_else(|| s.get("duration"))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
-
-                    let playable = if let Some(&(st, pl)) = priv_map.get(&id_val) {
-                        st >= 0 && pl > 0
-                    } else {
-                        let fee = s.get("fee").and_then(|v| v.as_i64()).unwrap_or(0);
-                        fee != 1 && fee != 4
-                    };
-
-                    tracks.push(Track {
-                        uri: format!("netease:track:{id_str}"),
-                        uid: id_str,
-                        name,
-                        artists,
-                        album,
-                        album_uri,
-                        image,
-                        duration_ms,
-                        explicit: false,
-                        playable,
-                    });
+                    if let Some(id) = s.get("id").and_then(value_id_str) {
+                        songs_by_id.insert(id, s.clone());
+                    }
                 }
             }
         }
 
-        Ok(tracks)
+        Ok(build_tracks_from_details(ids, &songs_by_id, &privs_by_id, originals))
     }
 
     /// The home page content (recommended playlists and charts).
     pub fn home(&self) -> Result<Home, EngineError> {
-        let profile = self.profile();
+        let profile = if self.is_signed_in() {
+            match self.require_profile() {
+                Ok(p) => Some(p),
+                Err(e) if e.code == ErrorCode::SignedOut => None,
+                Err(_) => self.profile.lock().unwrap().clone(),
+            }
+        } else {
+            None
+        };
         let greeting = if let Some(ref p) = profile {
             format!("发现音乐 · {}", p.name)
         } else {
             "网易云音乐 · 发现音乐".to_string()
         };
 
+        let (rec_res, top_res) = std::thread::scope(|scope| {
+            let rec_handle = scope.spawn(|| {
+                let mut params = HashMap::new();
+                params.insert("limit", json!(24));
+                self.request("/api/personalized/playlist", &params, false)
+            });
+            let top_handle = scope.spawn(|| self.request("/api/toplist/detail", &HashMap::new(), false));
+            (
+                rec_handle.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "home request failed"))),
+                top_handle.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "toplist request failed"))),
+            )
+        });
+
+        let rec_items: Vec<Item> = match &rec_res {
+            Ok(res) => res
+                .get("result")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            let id = p.get("id").and_then(value_id_str)?;
+                            let name = p.get("name")?.as_str()?.to_string();
+                            let image = artwork_url(p.get("picUrl").and_then(Value::as_str));
+                            let play_count = p.get("playCount").and_then(Value::as_f64).unwrap_or(0.0);
+                            let subtitle = if play_count >= 10000.0 {
+                                format!("{:.1} 万播放", play_count / 10000.0)
+                            } else {
+                                "推荐歌单".to_string()
+                            };
+                            Some(Item {
+                                uri: format!("netease:playlist:{id}"),
+                                kind: "playlist".to_string(),
+                                name,
+                                subtitle,
+                                image,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+
+        let top_items: Vec<Item> = match &top_res {
+            Ok(res) => res
+                .get("list")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .take(12)
+                        .filter_map(|p| {
+                            let id = p.get("id").and_then(value_id_str)?;
+                            let name = p.get("name")?.as_str()?.to_string();
+                            let image = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
+                            let subtitle = p
+                                .get("updateFrequency")
+                                .and_then(Value::as_str)
+                                .unwrap_or("官方榜单")
+                                .to_string();
+                            Some(Item {
+                                uri: format!("netease:playlist:{id}"),
+                                kind: "playlist".to_string(),
+                                name,
+                                subtitle,
+                                image,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+
+        if let (Err(rec_err), Err(top_err)) = (&rec_res, &top_res) {
+            if rec_err.code == ErrorCode::SignedOut {
+                return Err(rec_err.clone());
+            }
+            if top_err.code == ErrorCode::SignedOut {
+                return Err(top_err.clone());
+            }
+            return Err(rec_err.clone());
+        }
+
         let mut sections = Vec::new();
 
         // 1. Personalized recommendation section when signed in
         if profile.is_some() {
-            let mut items = Vec::new();
-            items.push(Item {
-                uri: "netease:playlist:daily".to_string(),
-                kind: "playlist".to_string(),
-                name: "每日推荐".to_string(),
-                subtitle: "每天 6:00 更新 · 专属推荐".to_string(),
-                image: "https://p1.music.126.net/19b5c3bfd5cb8d2db82c5f1566a7b3db/109951163351984240.jpg?param=300y300".to_string(),
-            });
-            items.push(Item {
-                uri: "netease:collection:tracks".to_string(),
-                kind: "collection".to_string(),
-                name: "我喜欢的音乐".to_string(),
-                subtitle: "红心歌单".to_string(),
-                image: "https://p1.music.126.net/vC_Hn86qfS-L_eS1y9k81g==/109951167878895057.jpg?param=300y300".to_string(),
-            });
-            items.push(Item {
-                uri: "netease:playlist:3136952023".to_string(),
-                kind: "playlist".to_string(),
-                name: "私人雷达".to_string(),
-                subtitle: "根据你的听歌偏好生成".to_string(),
-                image: "https://p1.music.126.net/H7v9t9o0E4dG1QvP9Hh4rA==/109951168128365287.jpg?param=300y300".to_string(),
-            });
-
+            let cover0 = rec_items.first().map(|i| i.image.clone()).unwrap_or_default();
+            let cover1 = rec_items.get(1).map(|i| i.image.clone()).unwrap_or_else(|| cover0.clone());
             sections.push(Section {
                 title: "为你推荐".to_string(),
-                items,
+                items: vec![
+                    Item {
+                        uri: "netease:playlist:daily".to_string(),
+                        kind: "playlist".to_string(),
+                        name: "每日推荐".to_string(),
+                        subtitle: "每天 6:00 更新 · 专属推荐".to_string(),
+                        image: cover0,
+                    },
+                    Item {
+                        uri: "netease:collection:tracks".to_string(),
+                        kind: "collection".to_string(),
+                        name: "我喜欢的音乐".to_string(),
+                        subtitle: "红心歌单".to_string(),
+                        image: String::new(),
+                    },
+                    Item {
+                        uri: "netease:playlist:3136952023".to_string(),
+                        kind: "playlist".to_string(),
+                        name: "私人雷达".to_string(),
+                        subtitle: "根据你的听歌偏好生成".to_string(),
+                        image: cover1,
+                    },
+                ],
             });
         }
 
         // 2. Recommended playlists
-        let mut params = HashMap::new();
-        params.insert("limit", json!(24));
-        if let Ok(res) = self.request("/api/personalized/playlist", &params, false) {
-            if let Some(arr) = res.get("result").and_then(|v| v.as_array()) {
-                let items: Vec<Item> = arr
-                    .iter()
-                    .filter_map(|p| {
-                        let id = p.get("id")?.to_string();
-                        let name = p.get("name")?.as_str()?.to_string();
-                        let image = artwork_url(p.get("picUrl").and_then(|u| u.as_str()));
-                        let play_count = p.get("playCount").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let subtitle = if play_count >= 10000.0 {
-                            format!("{:.1} 万播放", play_count / 10000.0)
-                        } else {
-                            "推荐歌单".to_string()
-                        };
-                        Some(Item {
-                            uri: format!("netease:playlist:{id}"),
-                            kind: "playlist".to_string(),
-                            name,
-                            subtitle,
-                            image,
-                        })
-                    })
-                    .collect();
-
-                if !items.is_empty() {
-                    sections.push(Section {
-                        title: "推荐歌单".to_string(),
-                        items,
-                    });
-                }
-            }
+        if !rec_items.is_empty() {
+            sections.push(Section {
+                title: "推荐歌单".to_string(),
+                items: rec_items,
+            });
         }
 
         // 3. Top lists / Charts
-        if let Ok(res) = self.request("/api/toplist/detail", &HashMap::new(), false) {
-            if let Some(arr) = res.get("list").and_then(|v| v.as_array()) {
-                let items: Vec<Item> = arr
-                    .iter()
-                    .take(12)
-                    .filter_map(|p| {
-                        let id = p.get("id")?.to_string();
-                        let name = p.get("name")?.as_str()?.to_string();
-                        let image = artwork_url(p.get("coverImgUrl").and_then(|u| u.as_str()));
-                        let subtitle = p
-                            .get("updateFrequency")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("官方榜单")
-                            .to_string();
-                        Some(Item {
-                            uri: format!("netease:playlist:{id}"),
-                            kind: "playlist".to_string(),
-                            name,
-                            subtitle,
-                            image,
-                        })
-                    })
-                    .collect();
-
-                if !items.is_empty() {
-                    sections.push(Section {
-                        title: "排行榜".to_string(),
-                        items,
-                    });
-                }
-            }
+        if !top_items.is_empty() {
+            sections.push(Section {
+                title: "排行榜".to_string(),
+                items: top_items,
+            });
         }
 
         Ok(Home { greeting, sections })
@@ -707,41 +1164,57 @@ impl NetEaseClient {
             return Ok(SearchResults::default());
         }
 
-        // 1. Search tracks (type = 1)
-        let mut track_params = HashMap::new();
-        track_params.insert("s", json!(text));
-        track_params.insert("type", json!(1));
-        track_params.insert("limit", json!(30));
-        let track_res = self.request("/api/cloudsearch/pc", &track_params, false)?;
+        let search_type = |kind: i64, limit: i64| {
+            let mut params = HashMap::new();
+            params.insert("s", json!(text));
+            params.insert("type", json!(kind));
+            params.insert("limit", json!(limit));
+            params.insert("offset", json!(0));
+            params.insert("total", json!("true"));
+            self.request("/api/cloudsearch/pc", &params, false)
+        };
+
+        let (track_res, artist_res, album_res, playlist_res) = std::thread::scope(|scope| {
+            let t = scope.spawn(|| search_type(1, 30));
+            let ar = scope.spawn(|| search_type(100, 8));
+            let al = scope.spawn(|| search_type(10, 8));
+            let pl = scope.spawn(|| search_type(1000, 8));
+            (
+                t.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "search failed"))),
+                ar.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "search failed"))),
+                al.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "search failed"))),
+                pl.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "search failed"))),
+            )
+        });
+
+        let track_res = track_res?;
+        let artist_res = artist_res?;
+        let album_res = album_res?;
+        let playlist_res = playlist_res?;
+
         let raw_songs = track_res
             .get("result")
             .and_then(|r| r.get("songs"))
-            .and_then(|s| s.as_array())
+            .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
 
         let song_ids: Vec<String> = raw_songs
             .iter()
-            .filter_map(|s| s.get("id").map(|v| v.to_string()))
+            .filter_map(|s| s.get("id").and_then(value_id_str))
             .collect();
-        let tracks = self.song_details(&song_ids)?;
+        let tracks = self.song_details_with_fallback(&song_ids, &raw_songs)?;
 
-        // 2. Search artists (type = 100)
-        let mut artist_params = HashMap::new();
-        artist_params.insert("s", json!(text));
-        artist_params.insert("type", json!(100));
-        artist_params.insert("limit", json!(8));
-        let artist_res = self.request("/api/cloudsearch/pc", &artist_params, false)?;
         let artists: Vec<Item> = artist_res
             .get("result")
             .and_then(|r| r.get("artists"))
-            .and_then(|s| s.as_array())
+            .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
                     .filter_map(|a| {
-                        let id = a.get("id")?.to_string();
+                        let id = a.get("id").and_then(value_id_str)?;
                         let name = a.get("name")?.as_str()?.to_string();
-                        let image = artwork_url(a.get("picUrl").or_else(|| a.get("img1v1Url")).and_then(|u| u.as_str()));
+                        let image = artwork_url(a.get("picUrl").or_else(|| a.get("img1v1Url")).and_then(Value::as_str));
                         Some(Item {
                             uri: format!("netease:artist:{id}"),
                             kind: "artist".to_string(),
@@ -754,26 +1227,20 @@ impl NetEaseClient {
             })
             .unwrap_or_default();
 
-        // 3. Search albums (type = 10)
-        let mut album_params = HashMap::new();
-        album_params.insert("s", json!(text));
-        album_params.insert("type", json!(10));
-        album_params.insert("limit", json!(8));
-        let album_res = self.request("/api/cloudsearch/pc", &album_params, false)?;
         let albums: Vec<Item> = album_res
             .get("result")
             .and_then(|r| r.get("albums"))
-            .and_then(|s| s.as_array())
+            .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
                     .filter_map(|a| {
-                        let id = a.get("id")?.to_string();
+                        let id = a.get("id").and_then(value_id_str)?;
                         let name = a.get("name")?.as_str()?.to_string();
                         let artist_name = a
                             .get("artist")
-                            .and_then(|ar| ar.get("name").and_then(|n| n.as_str()))
+                            .and_then(|ar| ar.get("name").and_then(Value::as_str))
                             .unwrap_or("未知歌手");
-                        let image = artwork_url(a.get("picUrl").and_then(|u| u.as_str()));
+                        let image = artwork_url(a.get("picUrl").and_then(Value::as_str));
                         Some(Item {
                             uri: format!("netease:album:{id}"),
                             kind: "album".to_string(),
@@ -786,26 +1253,20 @@ impl NetEaseClient {
             })
             .unwrap_or_default();
 
-        // 4. Search playlists (type = 1000)
-        let mut playlist_params = HashMap::new();
-        playlist_params.insert("s", json!(text));
-        playlist_params.insert("type", json!(1000));
-        playlist_params.insert("limit", json!(8));
-        let playlist_res = self.request("/api/cloudsearch/pc", &playlist_params, false)?;
         let playlists: Vec<Item> = playlist_res
             .get("result")
             .and_then(|r| r.get("playlists"))
-            .and_then(|s| s.as_array())
+            .and_then(Value::as_array)
             .map(|arr| {
                 arr.iter()
                     .filter_map(|p| {
-                        let id = p.get("id")?.to_string();
+                        let id = p.get("id").and_then(value_id_str)?;
                         let name = p.get("name")?.as_str()?.to_string();
                         let owner = p
                             .get("creator")
-                            .and_then(|c| c.get("nickname").and_then(|n| n.as_str()))
+                            .and_then(|c| c.get("nickname").and_then(Value::as_str))
                             .unwrap_or("网易云歌单");
-                        let image = artwork_url(p.get("coverImgUrl").and_then(|u| u.as_str()));
+                        let image = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
                         Some(Item {
                             uri: format!("netease:playlist:{id}"),
                             kind: "playlist".to_string(),
@@ -836,23 +1297,21 @@ impl NetEaseClient {
 
         if uri == "netease:playlist:daily" {
             // Daily recommend songs
-            if !self.is_signed_in() {
-                return Err(EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"));
-            }
+            let _ = self.require_profile()?;
             let res = self.request("/api/v3/discovery/recommend/songs", &HashMap::new(), false)?;
             let songs = res
                 .get("data")
                 .and_then(|d| d.get("dailySongs"))
-                .and_then(|s| s.as_array())
+                .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
             let ids: Vec<String> = songs
                 .iter()
-                .filter_map(|s| s.get("id").map(|v| v.to_string()))
+                .filter_map(|s| s.get("id").and_then(value_id_str))
                 .collect();
-            let tracks = self.song_details(&ids)?;
+            let tracks = self.song_details_with_fallback(&ids, &songs)?;
 
-            return Ok(Collection {
+            let collection = Collection {
                 header: Header {
                     uri: "netease:playlist:daily".to_string(),
                     kind: "playlist".to_string(),
@@ -864,83 +1323,78 @@ impl NetEaseClient {
                 total: tracks.len() as f64,
                 tracks,
                 releases: Vec::new(),
-            });
+            };
+            self.cache_collection(&collection);
+            return Ok(collection);
         }
 
-        let raw_id = uri.strip_prefix("netease:playlist:").unwrap_or(&uri);
-        let mut params = HashMap::new();
-        params.insert("id", json!(raw_id));
-        params.insert("n", json!(1000));
-        let res = self.request("/api/v6/playlist/detail", &params, false)?;
-        let p = res
-            .get("playlist")
-            .ok_or_else(|| EngineError::new(ErrorCode::NotFound, "歌单不存在或无权访问"))?;
+        let raw_id = valid_positive_id(uri.strip_prefix("netease:playlist:").unwrap_or(&uri))?;
+        let p = self.fetch_playlist_detail(&raw_id)?;
+        let parsed = parse_playlist_detail(&p);
+        let tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+        let total = parsed.track_count.unwrap_or(tracks.len() as f64);
 
-        let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("歌单").to_string();
-        let subtitle = p
-            .get("creator")
-            .and_then(|c| c.get("nickname").and_then(|v| v.as_str()))
-            .unwrap_or("网易云歌单")
-            .to_string();
-        let image = artwork_url(p.get("coverImgUrl").and_then(|v| v.as_str()));
-        let description = p.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-        let track_ids: Vec<String> = p
-            .get("trackIds")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|t| t.get("id").map(|i| i.to_string())).collect())
-            .unwrap_or_default();
-
-        let tracks = self.song_details(&track_ids)?;
-
-        Ok(Collection {
+        let collection = Collection {
             header: Header {
-                uri,
+                uri: format!("netease:playlist:{raw_id}"),
                 kind: "playlist".to_string(),
-                name,
-                subtitle,
-                image,
-                description,
+                name: parsed.name,
+                subtitle: parsed.subtitle,
+                image: parsed.image,
+                description: parsed.description,
             },
-            total: tracks.len() as f64,
+            total,
             tracks,
             releases: Vec::new(),
-        })
+        };
+        self.cache_collection(&collection);
+        Ok(collection)
     }
 
     /// Fetches an album by id.
     pub fn album(&self, id_or_uri: &str) -> Result<Collection, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("netease:album:").unwrap_or(id_or_uri);
+        let raw_id = valid_positive_id(id_or_uri.strip_prefix("netease:album:").unwrap_or(id_or_uri))?;
         let path = format!("/api/v1/album/{raw_id}");
         let res = self.request(&path, &HashMap::new(), false)?;
         let a = res
             .get("album")
             .ok_or_else(|| EngineError::new(ErrorCode::NotFound, "专辑不存在或不可用"))?;
 
-        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("专辑").to_string();
-        let subtitle = a
+        let name = a.get("name").and_then(Value::as_str).unwrap_or("专辑").to_string();
+        let mut subtitle = a
             .get("artists")
-            .and_then(|arr| arr.as_array())
+            .and_then(Value::as_array)
             .map(|artists| {
                 artists
                     .iter()
-                    .filter_map(|ar| ar.get("name").and_then(|v| v.as_str()))
+                    .filter_map(|ar| ar.get("name").and_then(Value::as_str))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
             .unwrap_or_default();
-        let image = artwork_url(a.get("picUrl").and_then(|v| v.as_str()));
-        let description = a.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if subtitle.is_empty() {
+            subtitle = a
+                .get("artist")
+                .and_then(|ar| ar.get("name").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string();
+        }
+        let image = artwork_url(a.get("picUrl").and_then(Value::as_str));
+        let description = a.get("description").and_then(Value::as_str).unwrap_or("").to_string();
 
-        let song_ids: Vec<String> = res
+        let raw_songs = res
             .get("songs")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|s| s.get("id").map(|v| v.to_string())).collect())
-            .unwrap_or_default();
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let song_ids: Vec<String> = raw_songs
+            .iter()
+            .filter_map(|s| s.get("id").and_then(value_id_str))
+            .collect();
 
-        let tracks = self.song_details(&song_ids)?;
+        let tracks = self.song_details_with_fallback(&song_ids, raw_songs)?;
 
-        Ok(Collection {
+        let collection = Collection {
             header: Header {
                 uri: format!("netease:album:{raw_id}"),
                 kind: "album".to_string(),
@@ -952,43 +1406,59 @@ impl NetEaseClient {
             total: tracks.len() as f64,
             tracks,
             releases: Vec::new(),
-        })
+        };
+        self.cache_collection(&collection);
+        Ok(collection)
     }
 
     /// Fetches an artist by id.
     pub fn artist(&self, id_or_uri: &str) -> Result<Collection, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("netease:artist:").unwrap_or(id_or_uri);
+        let raw_id = valid_positive_id(id_or_uri.strip_prefix("netease:artist:").unwrap_or(id_or_uri))?;
         let artist_path = format!("/api/v1/artist/{raw_id}");
         let albums_path = format!("/api/artist/albums/{raw_id}");
 
-        let res = self.request(&artist_path, &HashMap::new(), false)?;
+        let (res, alb_res) = std::thread::scope(|scope| {
+            let artist_h = scope.spawn(|| self.request(&artist_path, &HashMap::new(), false));
+            let albums_h = scope.spawn(|| {
+                let mut album_params = HashMap::new();
+                album_params.insert("limit", json!(50));
+                self.request(&albums_path, &album_params, false)
+            });
+            (
+                artist_h.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "artist request failed"))),
+                albums_h.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "artist albums request failed"))),
+            )
+        });
+
+        let res = res?;
         let ar = res
             .get("artist")
             .ok_or_else(|| EngineError::new(ErrorCode::NotFound, "歌手不存在或不可用"))?;
 
-        let name = ar.get("name").and_then(|v| v.as_str()).unwrap_or("歌手").to_string();
-        let image = artwork_url(ar.get("picUrl").or_else(|| ar.get("img1v1Url")).and_then(|v| v.as_str()));
-        let description = ar.get("briefDesc").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = ar.get("name").and_then(Value::as_str).unwrap_or("歌手").to_string();
+        let image = artwork_url(ar.get("picUrl").or_else(|| ar.get("img1v1Url")).and_then(Value::as_str));
+        let description = ar.get("briefDesc").and_then(Value::as_str).unwrap_or("").to_string();
 
-        let hot_ids: Vec<String> = res
+        let raw_hot = res
             .get("hotSongs")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|s| s.get("id").map(|v| v.to_string())).collect())
-            .unwrap_or_default();
-        let tracks = self.song_details(&hot_ids)?;
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let hot_ids: Vec<String> = raw_hot
+            .iter()
+            .filter_map(|s| s.get("id").and_then(value_id_str))
+            .collect();
+        let tracks = self.song_details_with_fallback(&hot_ids, raw_hot)?;
 
-        // Fetch albums
-        let mut album_params = HashMap::new();
-        album_params.insert("limit", json!(30));
-        let mut releases = Vec::new();
-        if let Ok(alb_res) = self.request(&albums_path, &album_params, false) {
-            if let Some(arr) = alb_res.get("hotAlbums").and_then(|v| v.as_array()) {
-                releases = arr
-                    .iter()
+        let releases = alb_res
+            .ok()
+            .and_then(|r| r.get("hotAlbums").and_then(Value::as_array).cloned())
+            .map(|arr| {
+                arr.iter()
                     .filter_map(|a| {
-                        let id = a.get("id")?.to_string();
+                        let id = a.get("id").and_then(value_id_str)?;
                         let a_name = a.get("name")?.as_str()?.to_string();
-                        let a_img = artwork_url(a.get("picUrl").and_then(|u| u.as_str()));
+                        let a_img = artwork_url(a.get("picUrl").and_then(Value::as_str));
                         Some(Item {
                             uri: format!("netease:album:{id}"),
                             kind: "album".to_string(),
@@ -997,11 +1467,11 @@ impl NetEaseClient {
                             image: a_img,
                         })
                     })
-                    .collect();
-            }
-        }
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        Ok(Collection {
+        let collection = Collection {
             header: Header {
                 uri: format!("netease:artist:{raw_id}"),
                 kind: "artist".to_string(),
@@ -1013,107 +1483,287 @@ impl NetEaseClient {
             total: tracks.len() as f64,
             tracks,
             releases,
-        })
+        };
+        self.cache_collection(&collection);
+        Ok(collection)
     }
 
-    /// Fetches the signed-in user's Liked Songs.
-    pub fn liked_songs(&self) -> Result<Collection, EngineError> {
-        let profile = self.profile().ok_or_else(|| {
-            EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐")
-        })?;
+    fn liked_ids_for(&self, uid: &str) -> Result<Vec<String>, EngineError> {
+        {
+            let lock = self.liked_cache.lock().unwrap();
+            if let Some(ref cache) = *lock {
+                if cache.uid == uid && cache.at.elapsed() < LIKED_TTL {
+                    return Ok(cache.ids.clone());
+                }
+            }
+        }
 
         let mut params = HashMap::new();
-        params.insert("uid", json!(profile.id));
+        params.insert("uid", json!(uid));
         let res = self.request("/api/song/like/get", &params, true)?;
         let ids: Vec<String> = res
             .get("ids")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().map(|id| id.to_string()).collect())
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(value_id_str).collect())
             .unwrap_or_default();
+        let id_set: HashSet<String> = ids.iter().cloned().collect();
 
-        let tracks = self.song_details(&ids.iter().take(300).cloned().collect::<Vec<_>>())?;
-        let first_image = tracks.first().map(|t| t.image.clone()).unwrap_or_default();
+        *self.liked_cache.lock().unwrap() = Some(LikedCache {
+            uid: uid.to_string(),
+            ids: ids.clone(),
+            id_set,
+            at: Instant::now(),
+        });
 
-        Ok(Collection {
+        Ok(ids)
+    }
+
+    /// Best-effort check of whether `id_or_uri` is in the signed-in user's Liked Songs.
+    pub fn is_track_liked(&self, id_or_uri: &str) -> bool {
+        if !self.is_signed_in() {
+            return false;
+        }
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        if raw_id.is_empty() {
+            return false;
+        }
+        let Ok(profile) = self.require_profile() else {
+            return false;
+        };
+        if self.liked_ids_for(&profile.id).is_err() {
+            return false;
+        }
+        let lock = self.liked_cache.lock().unwrap();
+        lock.as_ref().is_some_and(|c| c.uid == profile.id && c.id_set.contains(raw_id))
+    }
+
+    fn cache_collection(&self, collection: &Collection) {
+        let mut cache = self.collection_cache.lock().unwrap();
+        cache.retain(|_, (_, at)| at.elapsed() < COLLECTION_PLAYBACK_TTL);
+        cache.insert(collection.header.uri.clone(), (collection.clone(), Instant::now()));
+    }
+
+    /// Returns tracks for `uri` when starting playback, reusing a recent
+    /// collection fetch if still fresh to avoid re-fetching large lists.
+    pub fn collection_tracks_for_playback(&self, uri: &str) -> Result<Vec<Track>, EngineError> {
+        {
+            let lock = self.collection_cache.lock().unwrap();
+            if let Some((col, at)) = lock.get(uri) {
+                if at.elapsed() < COLLECTION_PLAYBACK_TTL {
+                    return Ok(col.tracks.clone());
+                }
+            }
+        }
+        let col = if uri == "netease:collection:tracks" {
+            self.liked_songs()?
+        } else if uri.starts_with("netease:playlist:") {
+            self.playlist(uri)?
+        } else if uri.starts_with("netease:album:") {
+            self.album(uri)?
+        } else if uri.starts_with("netease:artist:") {
+            self.artist(uri)?
+        } else {
+            return Ok(Vec::new());
+        };
+        Ok(col.tracks)
+    }
+
+    fn fetch_playlist_detail(&self, raw_id: &str) -> Result<Value, EngineError> {
+        let mut params = HashMap::new();
+        params.insert("id", json!(raw_id));
+        params.insert("n", json!(PLAYLIST_PREVIEW_LIMIT));
+        let res = self.request("/api/v6/playlist/detail", &params, false)?;
+        res.get("playlist")
+            .cloned()
+            .ok_or_else(|| EngineError::new(ErrorCode::NotFound, "歌单不存在或无权访问"))
+    }
+
+    fn fetch_user_playlist_page(&self, uid: &str, offset: usize) -> Result<Value, EngineError> {
+        let mut params = HashMap::new();
+        params.insert("uid", json!(uid));
+        params.insert("limit", json!(200));
+        params.insert("offset", json!(offset));
+        self.request("/api/user/playlist", &params, false)
+    }
+
+    fn liked_playlist_id(&self, uid: &str) -> Result<Option<String>, EngineError> {
+        {
+            let lock = self.liked_playlist_id.lock().unwrap();
+            if let Some((cached_uid, pid)) = lock.as_ref() {
+                if cached_uid == uid {
+                    return Ok(Some(pid.clone()));
+                }
+            }
+        }
+
+        let mut offset = 0usize;
+        while offset < 2000 {
+            let res = self.fetch_user_playlist_page(uid, offset)?;
+            let arr = res.get("playlist").and_then(Value::as_array);
+            let page_len = arr.map_or(0, Vec::len);
+
+            if let Some(arr) = arr {
+                for p in arr {
+                    if is_own_liked_playlist(p, uid) {
+                        if let Some(id) = p.get("id").and_then(value_id_str) {
+                            *self.liked_playlist_id.lock().unwrap() = Some((uid.to_string(), id.clone()));
+                            return Ok(Some(id));
+                        }
+                    }
+                }
+            }
+
+            let more = res.get("more").and_then(Value::as_bool).unwrap_or(false);
+            if !more || page_len < 200 {
+                break;
+            }
+            offset += page_len;
+        }
+
+        Ok(None)
+    }
+
+    /// Fetches the signed-in user's Liked Songs.
+    ///
+    /// Prefers the user's `specialType == 5` playlist via `/api/v6/playlist/detail`
+    /// so tracks keep NetEase's official order (newest liked on top) and include
+    /// the full `trackIds` list without the 300/1000 truncation. Falls back to
+    /// `/api/song/like/get` only if that playlist cannot be located.
+    pub fn liked_songs(&self) -> Result<Collection, EngineError> {
+        let profile = self.require_profile()?;
+
+        let mut playlist_result = None;
+        if let Some(pid) = self.liked_playlist_id(&profile.id)? {
+            match self.fetch_playlist_detail(&pid) {
+                Ok(p) => {
+                    let parsed = parse_playlist_detail(&p);
+                    let tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+                    let cover = tracks
+                        .first()
+                        .map(|t| t.image.clone())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(parsed.image);
+                    let total_count = parsed
+                        .track_count
+                        .map(|n| n.max(0.0).round() as usize)
+                        .unwrap_or(tracks.len())
+                        .max(tracks.len());
+                    playlist_result = Some((tracks, cover, total_count));
+                }
+                Err(err) if err.code == ErrorCode::NotFound => {
+                    *self.liked_playlist_id.lock().unwrap() = None;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        let (tracks, cover, total_count) = match playlist_result {
+            Some(found) => found,
+            None => {
+                let ids = self.liked_ids_for(&profile.id)?;
+                let tracks = self.song_details(&ids)?;
+                let cover = tracks.first().map(|t| t.image.clone()).unwrap_or_default();
+                let total_count = ids.len().max(tracks.len());
+                (tracks, cover, total_count)
+            }
+        };
+
+        let collection = Collection {
             header: Header {
                 uri: "netease:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: profile.name,
-                image: first_image,
-                description: format!("网易云音乐 · 共 {} 首喜欢的音乐", ids.len()),
+                image: cover,
+                description: format!("网易云音乐 · 共 {total_count} 首喜欢的音乐"),
             },
-            total: ids.len() as f64,
+            total: total_count as f64,
             tracks,
             releases: Vec::new(),
-        })
+        };
+        self.cache_collection(&collection);
+        Ok(collection)
     }
 
     /// Fetches the user's library playlists.
     pub fn library(&self) -> Result<Library, EngineError> {
-        let profile = self
-            .profile()
-            .ok_or_else(|| EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"))?;
+        let profile = self.require_profile()?;
+
+        let mut playlist_items = Vec::new();
+        let mut liked_cover = String::new();
+        let mut offset = 0usize;
+
+        while offset < 2000 {
+            let res = self.fetch_user_playlist_page(&profile.id, offset)?;
+            let arr = res.get("playlist").and_then(Value::as_array);
+            let page_len = arr.map_or(0, Vec::len);
+
+            if let Some(arr) = arr {
+                for p in arr {
+                    if is_own_liked_playlist(p, &profile.id) {
+                        if let Some(id) = p.get("id").and_then(value_id_str) {
+                            *self.liked_playlist_id.lock().unwrap() = Some((profile.id.clone(), id));
+                        }
+                        if liked_cover.is_empty() {
+                            liked_cover = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
+                        }
+                        continue;
+                    }
+                    if let Some(id) = p.get("id").and_then(value_id_str) {
+                        let name = p.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                        let count = p.get("trackCount").and_then(Value::as_i64).unwrap_or(0);
+                        let owner = p
+                            .get("creator")
+                            .and_then(|c| c.get("nickname").and_then(Value::as_str))
+                            .unwrap_or("");
+                        let image = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
+                        playlist_items.push(Item {
+                            uri: format!("netease:playlist:{id}"),
+                            kind: "playlist".to_string(),
+                            name,
+                            subtitle: format!("{count} 首 · by {owner}"),
+                            image,
+                        });
+                    }
+                }
+            }
+
+            let more = res.get("more").and_then(Value::as_bool).unwrap_or(false);
+            if !more || page_len < 200 {
+                break;
+            }
+            offset += page_len;
+        }
+
+        let daily_cover = playlist_items
+            .first()
+            .map(|i| i.image.clone())
+            .unwrap_or_default();
 
         let mut items = vec![
-            // 1. Liked Songs
             Item {
                 uri: "netease:collection:tracks".to_string(),
                 kind: "collection".to_string(),
                 name: "我喜欢的音乐".to_string(),
                 subtitle: "心动精选".to_string(),
-                image: "https://p1.music.126.net/vC_Hn86qfS-L_eS1y9k81g==/109951167878895057.jpg?param=300y300".to_string(),
+                image: liked_cover,
             },
-            // 2. Daily Recommend
             Item {
                 uri: "netease:playlist:daily".to_string(),
                 kind: "playlist".to_string(),
                 name: "每日推荐".to_string(),
                 subtitle: "每天更新".to_string(),
-                image: "https://p1.music.126.net/19b5c3bfd5cb8d2db82c5f1566a7b3db/109951163351984240.jpg?param=300y300".to_string(),
+                image: daily_cover,
             },
         ];
-
-        // 3. User's playlists
-        let mut params = HashMap::new();
-        params.insert("uid", json!(profile.id));
-        params.insert("limit", json!(100));
-        let res = self.request("/api/user/playlist", &params, false)?;
-        if let Some(arr) = res.get("playlist").and_then(|v| v.as_array()) {
-            for p in arr {
-                // Skip the first special "I like" playlist if present
-                if p.get("specialType").and_then(|v| v.as_i64()) == Some(5) {
-                    continue;
-                }
-                if let Some(id) = p.get("id").map(|v| v.to_string()) {
-                    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let count = p.get("trackCount").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let owner = p
-                        .get("creator")
-                        .and_then(|c| c.get("nickname").and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let image = artwork_url(p.get("coverImgUrl").and_then(|v| v.as_str()));
-                    items.push(Item {
-                        uri: format!("netease:playlist:{id}"),
-                        kind: "playlist".to_string(),
-                        name,
-                        subtitle: format!("{count} 首 · by {owner}"),
-                        image,
-                    });
-                }
-            }
-        }
+        items.extend(playlist_items);
 
         Ok(Library { items })
     }
 
     /// Gets the signed-in user info (`Me`).
     pub fn me(&self) -> Result<Me, EngineError> {
-        let profile = self
-            .profile()
-            .ok_or_else(|| {
-                EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐")
-            })?;
+        let profile = self.require_profile()?;
 
         Ok(Me {
             id: profile.id,
@@ -1125,7 +1775,7 @@ impl NetEaseClient {
 
     /// Fetches lyrics for a track ID.
     pub fn lyrics(&self, id_or_uri: &str) -> Result<Lyrics, EngineError> {
-        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        let raw_id = valid_positive_id(id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri))?;
         let mut params = HashMap::new();
         params.insert("id", json!(raw_id));
         params.insert("lv", json!(1));
@@ -1135,7 +1785,7 @@ impl NetEaseClient {
         let mut lrc = res
             .get("lrc")
             .and_then(|l| l.get("lyric"))
-            .and_then(|v| v.as_str())
+            .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
 
@@ -1155,42 +1805,284 @@ impl NetEaseClient {
                 if let Some(d_lrc) = desktop_res
                     .get("lrc")
                     .and_then(|l| l.get("lyric"))
-                    .and_then(|v| v.as_str())
+                    .and_then(Value::as_str)
                 {
                     lrc = d_lrc.to_string();
                 }
             }
         }
 
-        let mut lines = Vec::new();
-        for line in lrc.lines() {
-            let line = line.trim();
-            if !line.starts_with('[') {
-                continue;
-            }
-            if let Some(close_idx) = line.find(']') {
-                let time_str = &line[1..close_idx];
-                let words = line[close_idx + 1..].trim();
-                if let Some((min_str, sec_str)) = time_str.split_once(':') {
-                    if let (Ok(m), Ok(s)) = (min_str.parse::<f64>(), sec_str.parse::<f64>()) {
-                        let start_ms = m * 60_000.0 + s * 1000.0;
-                        lines.push(LyricLine {
-                            start_ms,
-                            words: if words.is_empty() { "♪".to_string() } else { words.to_string() },
-                        });
-                    }
-                }
+        Ok(parse_lyrics(&lrc))
+    }
+}
+
+struct ParsedPlaylist<'a> {
+    name: String,
+    subtitle: String,
+    image: String,
+    description: String,
+    preview_tracks: &'a [Value],
+    track_ids: Vec<String>,
+    track_count: Option<f64>,
+}
+
+fn is_own_liked_playlist(p: &Value, uid: &str) -> bool {
+    p.get("specialType").and_then(Value::as_i64) == Some(5)
+        && p.get("creator")
+            .and_then(|c| c.get("userId"))
+            .and_then(value_id_str)
+            .as_deref()
+            == Some(uid)
+}
+
+fn parse_playlist_detail(p: &Value) -> ParsedPlaylist<'_> {
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("歌单").to_string();
+    let subtitle = p
+        .get("creator")
+        .and_then(|c| c.get("nickname").and_then(Value::as_str))
+        .unwrap_or("网易云歌单")
+        .to_string();
+    let image = artwork_url(p.get("coverImgUrl").or_else(|| p.get("picUrl")).and_then(Value::as_str));
+    let description = p.get("description").and_then(Value::as_str).unwrap_or("").to_string();
+    let preview_tracks = p
+        .get("tracks")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let track_ids: Vec<String> = p
+        .get("trackIds")
+        .and_then(Value::as_array)
+        .or_else(|| p.get("tracks").and_then(Value::as_array))
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.get("id").and_then(value_id_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    let track_count = p.get("trackCount").and_then(Value::as_f64);
+
+    ParsedPlaylist {
+        name,
+        subtitle,
+        image,
+        description,
+        preview_tracks,
+        track_ids,
+        track_count,
+    }
+}
+
+fn unavailable_track(id_str: &str) -> Track {
+    Track {
+        uri: format!("netease:track:{id_str}"),
+        uid: id_str.to_string(),
+        name: "歌曲暂不可用".to_string(),
+        artists: String::new(),
+        album: String::new(),
+        album_uri: String::new(),
+        image: String::new(),
+        duration_ms: 0.0,
+        explicit: false,
+        playable: false,
+    }
+}
+
+fn build_tracks_from_details(
+    ids: &[String],
+    songs_by_id: &HashMap<String, Value>,
+    privs_by_id: &HashMap<String, (i64, i64)>,
+    originals: &[Value],
+) -> Vec<Track> {
+    let fallback_by_id: HashMap<String, &Value> = originals
+        .iter()
+        .filter_map(|s| s.get("id").and_then(value_id_str).map(|id| (id, s)))
+        .collect();
+
+    let mut seen_uids = HashSet::with_capacity(ids.len());
+    let mut tracks = Vec::with_capacity(ids.len());
+    for (idx, raw_id) in ids.iter().enumerate() {
+        let mut track = if let Some(s) = songs_by_id.get(raw_id) {
+            track_from_json(raw_id, s, privs_by_id.get(raw_id).copied(), false)
+        } else if let Some(s) = fallback_by_id.get(raw_id) {
+            track_from_json(raw_id, s, None, true)
+        } else {
+            unavailable_track(raw_id)
+        };
+        if !seen_uids.insert(raw_id.clone()) {
+            track.uid = format!("{raw_id}#{idx}");
+        }
+        tracks.push(track);
+    }
+    tracks
+}
+
+fn map_ureq_error(err: ureq::Error) -> EngineError {
+    match err {
+        ureq::Error::Timeout(_) => {
+            EngineError::new(ErrorCode::Timeout, "网易云请求超时，请稍后重试")
+        }
+        other => EngineError::new(
+            ErrorCode::Internal,
+            format!("无法读取网易云音乐，请检查网络及系统代理后重试: {other}"),
+        ),
+    }
+}
+
+fn track_from_json(
+    id_str: &str,
+    s: &Value,
+    priv_entry: Option<(i64, i64)>,
+    force_unavailable: bool,
+) -> Track {
+    let name = s
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(if force_unavailable { "歌曲暂不可用" } else { "" })
+        .to_string();
+
+    let artists = s
+        .get("ar")
+        .or_else(|| s.get("artists"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.get("name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+
+    let album_obj = s.get("al").or_else(|| s.get("album"));
+    let album = album_obj
+        .and_then(|a| a.get("name").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string();
+    let album_id = album_obj
+        .and_then(|a| a.get("id").and_then(value_id_str))
+        .unwrap_or_default();
+    let album_uri = if album_id.is_empty() {
+        String::new()
+    } else {
+        format!("netease:album:{album_id}")
+    };
+    let image = artwork_url(album_obj.and_then(|a| a.get("picUrl").and_then(Value::as_str)));
+
+    let duration_ms = s
+        .get("dt")
+        .or_else(|| s.get("duration"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+
+    let playable = if force_unavailable {
+        false
+    } else if let Some((st, pl)) = priv_entry {
+        st >= 0 && pl > 0
+    } else if let Some(p) = s.get("privilege") {
+        let st = p.get("st").and_then(Value::as_i64).unwrap_or(0);
+        let pl = p.get("pl").and_then(Value::as_i64).unwrap_or(0);
+        st >= 0 && pl > 0
+    } else {
+        let fee = s.get("fee").and_then(Value::as_i64).unwrap_or(0);
+        fee != 1 && fee != 4
+    };
+
+    Track {
+        uri: format!("netease:track:{id_str}"),
+        uid: id_str.to_string(),
+        name,
+        artists,
+        album,
+        album_uri,
+        image,
+        duration_ms,
+        explicit: false,
+        playable,
+    }
+}
+
+fn parse_lrc_timestamp_ms(tag: &str) -> Option<f64> {
+    let (min_str, sec_part) = tag.split_once(':')?;
+    let mins: f64 = min_str.trim().parse().ok()?;
+    if mins < 0.0 || !mins.is_finite() {
+        return None;
+    }
+    // Support both `[mm:ss.xx]` and NetEase legacy `[mm:ss:xx]`.
+    let normalized_sec = if let Some((s, frac)) = sec_part.split_once(':') {
+        format!("{s}.{frac}")
+    } else {
+        sec_part.to_string()
+    };
+    let secs: f64 = normalized_sec.trim().parse().ok()?;
+    if secs < 0.0 || !secs.is_finite() {
+        return None;
+    }
+    Some(mins * 60_000.0 + secs * 1000.0)
+}
+
+fn is_lrc_metadata_tag(tag: &str) -> bool {
+    let Some((key, _)) = tag.split_once(':') else { return false };
+    let key = key.trim();
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn parse_lyrics(lrc: &str) -> Lyrics {
+    let mut timed_lines = Vec::new();
+    let mut plain_lines = Vec::new();
+
+    for raw_line in lrc.lines() {
+        let mut rest = raw_line.trim();
+        if rest.is_empty() {
+            continue;
+        }
+        let mut timestamps = Vec::new();
+        let mut metadata_only = false;
+        while rest.starts_with('[') {
+            let Some(close_idx) = rest.find(']') else { break };
+            let tag = &rest[1..close_idx];
+            if let Some(ms) = parse_lrc_timestamp_ms(tag) {
+                timestamps.push(ms);
+                rest = rest[close_idx + 1..].trim_start();
+            } else if is_lrc_metadata_tag(tag) {
+                metadata_only = true;
+                rest = rest[close_idx + 1..].trim_start();
+            } else {
+                break;
             }
         }
 
-        lines.sort_by(|a, b| a.start_ms.partial_cmp(&b.start_ms).unwrap_or(std::cmp::Ordering::Equal));
+        if !timestamps.is_empty() {
+            let words = if rest.trim().is_empty() {
+                "♪".to_string()
+            } else {
+                rest.trim().to_string()
+            };
+            for start_ms in timestamps {
+                timed_lines.push(LyricLine {
+                    start_ms,
+                    words: words.clone(),
+                });
+            }
+        } else if !metadata_only && !rest.trim().is_empty() {
+            plain_lines.push(LyricLine {
+                start_ms: 0.0,
+                words: rest.trim().to_string(),
+            });
+        }
+    }
 
-        let synced = !lines.is_empty();
-        Ok(Lyrics {
-            synced,
-            lines,
+    if !timed_lines.is_empty() {
+        timed_lines.sort_by(|a, b| a.start_ms.partial_cmp(&b.start_ms).unwrap_or(std::cmp::Ordering::Equal));
+        Lyrics {
+            synced: true,
+            lines: timed_lines,
             provider: "网易云音乐".to_string(),
-        })
+        }
+    } else {
+        Lyrics {
+            synced: false,
+            lines: plain_lines,
+            provider: "网易云音乐".to_string(),
+        }
     }
 }
 
@@ -1213,8 +2105,8 @@ fn parse_player_url_response(res: &Value, id_num: u64) -> Result<StreamLookup, E
 
     let audio_obj = res
         .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|arr| arr.iter().find(|item| item.get("id").and_then(|v| v.as_u64()) == Some(id_num)));
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.iter().find(|item| item.get("id").and_then(value_id_u64) == Some(id_num)));
 
     let Some(audio) = audio_obj else {
         return Ok(StreamLookup::TryFallback);
@@ -1236,7 +2128,7 @@ fn parse_player_url_response(res: &Value, id_num: u64) -> Result<StreamLookup, E
         }
     }
 
-    let raw_url = audio.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let raw_url = audio.get("url").and_then(Value::as_str).unwrap_or("");
     if raw_url.is_empty() {
         return Ok(StreamLookup::TryFallback);
     }
@@ -1247,7 +2139,22 @@ fn parse_player_url_response(res: &Value, id_num: u64) -> Result<StreamLookup, E
         raw_url.to_string()
     };
 
-    if !secure_url.starts_with("https://") || !secure_url.contains("music.126.net") {
+    if !secure_url.starts_with("https://") {
+        return Ok(StreamLookup::TryFallback);
+    }
+    let Some(host) = url_host(&secure_url) else {
+        return Ok(StreamLookup::TryFallback);
+    };
+    if !is_music_126_audio_host(host) {
+        return Ok(StreamLookup::TryFallback);
+    }
+
+    let audio_type = audio
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !audio_type.is_empty() && !matches!(audio_type.as_str(), "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav") {
         return Ok(StreamLookup::TryFallback);
     }
 
@@ -1273,29 +2180,70 @@ impl NetEaseClient {
 
     fn fetch_stream_url_once(&self, id_num: u64) -> Result<Option<String>, EngineError> {
         let tiers: &[(&str, &str)] = &[("exhigh", "mp3"), ("standard", "mp3")];
+        let mut last_err: Option<EngineError> = None;
 
         for &(level, encode_type) in tiers {
             match self.query_player_url(id_num, level, encode_type, true) {
                 Ok(StreamLookup::Url(url)) => return Ok(Some(url)),
                 Ok(StreamLookup::Unavailable) => return Ok(None),
                 Ok(StreamLookup::TryFallback) => continue,
+                Err(err) if err.code == ErrorCode::SignedOut => return Err(err),
                 Err(err) if err.message.starts_with("460:") => {
-                    // When EAPI hits risk control 460, try Web API endpoint first (which also refreshes cookies).
+                    // When EAPI hits risk control 460, try Web API endpoint for this tier (which also refreshes NMTID).
                     match self.query_player_url(id_num, level, encode_type, false) {
                         Ok(StreamLookup::Url(url)) => return Ok(Some(url)),
                         Ok(StreamLookup::Unavailable) => return Ok(None),
-                        Ok(StreamLookup::TryFallback) => return Err(err),
+                        Ok(StreamLookup::TryFallback) => {
+                            last_err = Some(err);
+                            continue;
+                        }
+                        Err(web_err) if web_err.code == ErrorCode::SignedOut => return Err(web_err),
                         Err(web_err) if web_err.message.starts_with("460:") => return Err(web_err),
                         Err(_) => return Err(err),
                     }
                 }
                 Err(err) => {
                     log::warn!("player url query failed for {id_num} at {level}: {err}");
+                    last_err = Some(err);
                     continue;
                 }
             }
         }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
         Ok(None)
+    }
+
+    /// Invalidates any cached audio stream URL for `id_or_uri`.
+    pub fn invalidate_stream_cache(&self, id_or_uri: &str) {
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        if let Ok(id_num) = raw_id.parse::<u64>() {
+            self.stream_cache.lock().unwrap().remove(&id_num);
+        }
+    }
+
+    /// Downloads raw audio bytes from a CDN stream URL without sending account cookies.
+    pub fn download_bytes(&self, stream_url: &str, max_bytes: u64) -> Result<Vec<u8>, EngineError> {
+        let resp = self
+            .download_agent
+            .get(stream_url)
+            .header("User-Agent", UA)
+            .header("Referer", format!("{SITE}/"))
+            .call()
+            .map_err(map_ureq_error)?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(EngineError::new(
+                ErrorCode::NotFound,
+                format!("音频下载失败（HTTP {}）", status.as_u16()),
+            ));
+        }
+        resp.into_body()
+            .into_with_config()
+            .limit(max_bytes)
+            .read_to_vec()
+            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("读取音频数据失败: {e}")))
     }
 
     /// Fetches audio stream URL (MP3/FLAC) for a track.
@@ -1309,11 +2257,11 @@ impl NetEaseClient {
         {
             let mut cache = self.stream_cache.lock().unwrap();
             if let Some((url, at)) = cache.get(&id_num) {
-                if at.elapsed() < Duration::from_secs(600) {
+                if at.elapsed() < STREAM_TTL {
                     return Ok(url.clone());
                 }
             }
-            cache.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+            cache.retain(|_, (_, at)| at.elapsed() < STREAM_TTL);
         }
 
         // 2. Fetch with automatic 460 retry
@@ -1362,7 +2310,7 @@ impl NetEaseClient {
         if !self.is_signed_in() {
             return Err(EngineError::new(ErrorCode::SignedOut, "请先扫码登录网易云音乐"));
         }
-        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        let raw_id = valid_positive_id(id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri))?;
         let mut params = HashMap::new();
         params.insert("alg", json!("itembased"));
         params.insert("trackId", json!(raw_id));
@@ -1370,6 +2318,11 @@ impl NetEaseClient {
         params.insert("time", json!("3"));
 
         self.request("/api/radio/like", &params, true)?;
+        *self.liked_cache.lock().unwrap() = None;
+        self.collection_cache
+            .lock()
+            .unwrap()
+            .remove("netease:collection:tracks");
         Ok(())
     }
 }
@@ -1405,6 +2358,56 @@ mod tests {
     }
 
     #[test]
+    fn set_cookie_handles_revocation_expiry_and_max_age_precedence() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-cookie-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+
+        for revoke in [
+            "MUSIC_U=deleted; Max-Age=0; Path=/",
+            "MUSIC_U=deleted; Max-Age=-1; Path=/",
+            "MUSIC_U=; Path=/",
+            "MUSIC_U=deleted; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+            "MUSIC_U=still-set; Expires=Thursday, 01-Jan-70 00:00:00 GMT; Path=/",
+        ] {
+            let client = NetEaseClient::new(&data);
+            client.save_cookie_str("MUSIC_U=synthetic-old-session; __csrf=abc");
+            *client.profile.lock().unwrap() = Some(NetEaseProfile {
+                id: "8".into(),
+                name: "Fixture".into(),
+                avatar_url: String::new(),
+            });
+            client.persist_session();
+            assert!(client.is_signed_in());
+
+            let mut headers = HeaderMap::new();
+            headers.append(SET_COOKIE, HeaderValue::from_static(revoke));
+            let res = client.accept_response_cookies_into(&headers, &client.cookies, true);
+            assert_eq!(res.unwrap_err().code, ErrorCode::SignedOut);
+            assert!(!client.is_signed_in());
+            assert!(!data.join(crate::music::paths::SESSION_FILE).exists());
+        }
+
+        // Positive Max-Age overrides past Expires and persists the renewed cookie.
+        let client = NetEaseClient::new(&data);
+        client.save_cookie_str("MUSIC_U=synthetic-old");
+        let mut headers = HeaderMap::new();
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("MUSIC_U=synthetic-renewed; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/"),
+        );
+        client.accept_response_cookies_into(&headers, &client.cookies, true).unwrap();
+        let restored = NetEaseClient::new(&data);
+        assert_eq!(
+            restored.cookies.lock().unwrap().get("MUSIC_U").map(String::as_str),
+            Some("synthetic-renewed")
+        );
+
+        client.clear_session();
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn stream_cache_hits_and_clears_with_session() {
         let data = std::env::temp_dir().join(format!("nsh-music-netease-cache-{}", std::process::id()));
         fs::create_dir_all(&data).unwrap();
@@ -1417,7 +2420,12 @@ mod tests {
         // Stream url hits cache directly without hitting network
         assert_eq!(client.stream_url("netease:track:123456").unwrap(), fake_url);
 
+        // Invalidating single track removes only that entry
+        client.invalidate_stream_cache("netease:track:123456");
+        assert!(client.stream_cache.lock().unwrap().is_empty());
+
         // Clearing session clears the stream cache
+        client.stream_cache.lock().unwrap().insert(123456, (fake_url, Instant::now()));
         client.clear_session();
         assert!(client.stream_cache.lock().unwrap().is_empty());
 
@@ -1449,6 +2457,18 @@ mod tests {
         });
         assert_eq!(parse_player_url_response(&empty_tier_res, 1001), Ok(StreamLookup::TryFallback));
 
+        let unexpected_host_res = json!({
+            "code": 200,
+            "data": [{ "id": 1001, "code": 200, "url": "https://evil.example/music.126.net/a.mp3" }]
+        });
+        assert_eq!(parse_player_url_response(&unexpected_host_res, 1001), Ok(StreamLookup::TryFallback));
+
+        let unsupported_type_res = json!({
+            "code": 200,
+            "data": [{ "id": 1001, "code": 200, "url": "https://m701.music.126.net/a.ncm", "type": "ncm" }]
+        });
+        assert_eq!(parse_player_url_response(&unsupported_type_res, 1001), Ok(StreamLookup::TryFallback));
+
         let risk_res = json!({
             "code": 200,
             "data": [{ "id": 1001, "code": -460, "url": null }]
@@ -1461,15 +2481,122 @@ mod tests {
         let ok_res = json!({
             "code": 200,
             "data": [{
-                "id": 1001,
+                "id": "1001",
                 "code": 200,
                 "url": "http://m701.music.126.net/full.mp3",
-                "freeTrialInfo": null
+                "freeTrialInfo": null,
+                "type": "mp3"
             }]
         });
         assert_eq!(
             parse_player_url_response(&ok_res, 1001),
             Ok(StreamLookup::Url("https://m701.music.126.net/full.mp3".to_string()))
         );
+    }
+
+    #[test]
+    fn artwork_url_preserves_query_and_only_rewrites_cdn_hosts() {
+        assert_eq!(
+            artwork_url(Some("http://p1.music.126.net/cover.jpg")),
+            "https://p1.music.126.net/cover.jpg?param=300y300"
+        );
+        assert_eq!(
+            artwork_url(Some("https://p12.music.126.net/cover.jpg?quality=90&param=800y800#cover")),
+            "https://p12.music.126.net/cover.jpg?quality=90&param=300y300#cover"
+        );
+        assert_eq!(
+            artwork_url(Some("https://images.example/cover.jpg?param=200y200")),
+            "https://images.example/cover.jpg?param=200y200"
+        );
+        assert_eq!(
+            artwork_url(Some("https://p1.music.126.net:8443/cover.jpg")),
+            "https://p1.music.126.net:8443/cover.jpg"
+        );
+    }
+
+    #[test]
+    fn lyrics_parser_handles_multi_timestamps_colon_ms_and_plain_text() {
+        let multi = parse_lyrics("[ti:Test]\n[00:10.00][01:02:50]Chorus\n[00:05.50]Verse");
+        assert!(multi.synced);
+        assert_eq!(multi.lines.len(), 3);
+        assert_eq!(multi.lines[0].start_ms, 5500.0);
+        assert_eq!(multi.lines[1].start_ms, 10_000.0);
+        assert_eq!(multi.lines[1].words, "Chorus");
+        assert_eq!(multi.lines[2].start_ms, 62_500.0);
+        assert_eq!(multi.lines[2].words, "Chorus");
+
+        let plain = parse_lyrics("First line\nSecond line");
+        assert!(!plain.synced);
+        assert_eq!(plain.lines.len(), 2);
+        assert_eq!(plain.lines[0].words, "First line");
+    }
+
+    #[test]
+    fn track_from_json_avoids_zero_album_uri_and_uses_embedded_privilege() {
+        let raw = json!({
+            "name": "Local",
+            "ar": [{ "name": "Artist" }],
+            "al": { "id": 0, "name": "" },
+            "dt": 120000,
+            "fee": 1,
+            "privilege": { "st": 0, "pl": 320000 }
+        });
+        let track = track_from_json("99", &raw, None, false);
+        assert!(track.album_uri.is_empty());
+        assert!(track.playable);
+    }
+
+    #[test]
+    fn parse_playlist_detail_keeps_all_track_ids_beyond_1000_in_order() {
+        let track_ids: Vec<Value> = (1..=1250).rev().map(|id| json!({ "id": id })).collect();
+        let playlist = json!({
+            "name": "我喜欢的音乐",
+            "creator": { "nickname": "Tester" },
+            "coverImgUrl": "http://p1.music.126.net/liked.jpg",
+            "trackCount": 1250,
+            "tracks": [],
+            "trackIds": track_ids,
+        });
+        let parsed = parse_playlist_detail(&playlist);
+        assert_eq!(parsed.track_ids.len(), 1250);
+        assert_eq!(parsed.track_ids.first().map(String::as_str), Some("1250"));
+        assert_eq!(parsed.track_ids.last().map(String::as_str), Some("1"));
+        assert_eq!(parsed.track_count, Some(1250.0));
+    }
+
+    #[test]
+    fn build_tracks_preserves_order_placeholders_and_unique_duplicate_uids() {
+        let ids = vec!["10".to_string(), "20".to_string(), "30".to_string(), "10".to_string()];
+        let mut songs_by_id = HashMap::new();
+        songs_by_id.insert(
+            "10".to_string(),
+            json!({ "id": 10, "name": "Newest", "ar": [{ "name": "A" }], "al": { "id": 1, "name": "Al" }, "dt": 1000 }),
+        );
+        let mut privs_by_id = HashMap::new();
+        privs_by_id.insert("10".to_string(), (0, 320000));
+        let originals = vec![json!({ "id": 20, "name": "Fallback", "ar": [{ "name": "B" }], "al": { "id": 2, "name": "Al2" }, "dt": 2000 })];
+
+        let tracks = build_tracks_from_details(&ids, &songs_by_id, &privs_by_id, &originals);
+        assert_eq!(tracks.len(), 4);
+        assert_eq!(tracks[0].name, "Newest");
+        assert_eq!(tracks[0].uid, "10");
+        assert!(tracks[0].playable);
+        assert_eq!(tracks[1].name, "Fallback");
+        assert!(!tracks[1].playable);
+        assert_eq!(tracks[2].name, "歌曲暂不可用");
+        assert!(!tracks[2].playable);
+        assert_eq!(tracks[3].name, "Newest");
+        assert_eq!(tracks[3].uid, "10#3");
+    }
+
+    #[test]
+    fn own_liked_playlist_check_requires_special_type_5_and_owner() {
+        let own = json!({ "id": 100, "specialType": 5, "creator": { "userId": 42 } });
+        let other = json!({ "id": 101, "specialType": 5, "creator": { "userId": 99 } });
+        let normal = json!({ "id": 102, "specialType": 0, "creator": { "userId": 42 } });
+
+        assert!(is_own_liked_playlist(&own, "42"));
+        assert!(!is_own_liked_playlist(&other, "42"));
+        assert!(!is_own_liked_playlist(&normal, "42"));
     }
 }

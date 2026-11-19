@@ -15,6 +15,11 @@ use crate::music::model::{EngineError, ErrorCode, Player, Repeat, Track};
 
 static AUDIO_TAP: OnceLock<tokio::sync::broadcast::Sender<f32>> = OnceLock::new();
 
+/// Maximum audio payload limit for streaming downloads (512 MB).
+/// NetEase audio tracks (especially high-bitrate 320kbps MP3s and Hi-Res FLACs)
+/// easily exceed ureq's default 10 MB body limit.
+const MAX_AUDIO_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Returns the global broadcast channel sender for audio samples.
 pub fn get_audio_tap() -> &'static tokio::sync::broadcast::Sender<f32> {
     AUDIO_TAP.get_or_init(|| {
@@ -219,17 +224,18 @@ impl PlayerManager {
     /// Plays a given track now.
     pub fn play_track(&mut self, track: Track, context_href: String) -> Result<(), EngineError> {
         let stream_url = self.client.stream_url(&track.uri)?;
-
-        // Download audio bytes
-        let resp = ureq::get(&stream_url)
-            .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
-            .header("Referer", "https://music.163.com/")
-            .call()
-            .map_err(|e| EngineError::new(ErrorCode::NotFound, format!("failed to stream audio: {e}")))?;
-        let bytes = resp
-            .into_body()
-            .read_to_vec()
-            .map_err(|e| EngineError::new(ErrorCode::Shape, format!("failed to read audio body: {e}")))?;
+        let bytes = match self.client.download_bytes(&stream_url, MAX_AUDIO_BYTES) {
+            Ok(bytes) => bytes,
+            Err(first_err) => {
+                // If a cached CDN URL expired or failed, invalidate and resolve a fresh stream URL once.
+                self.client.invalidate_stream_cache(&track.uri);
+                let fresh_url = self.client.stream_url(&track.uri)?;
+                if fresh_url == stream_url {
+                    return Err(first_err);
+                }
+                self.client.download_bytes(&fresh_url, MAX_AUDIO_BYTES)?
+            }
+        };
 
         if let Some(ref mut st) = self.stream_state {
             let metered = decode_audio(bytes)?;
@@ -239,6 +245,7 @@ impl PlayerManager {
             st.player.play();
         }
 
+        self.liked = self.client.is_track_liked(&track.uri);
         self.current_track = Some(track);
         self.context_href = context_href;
         self.playing = true;
@@ -474,10 +481,10 @@ impl PlayerManager {
 
     /// Marks the current track as liked / unliked.
     pub fn set_liked(&mut self, on: bool) -> Result<(), EngineError> {
-        self.liked = on;
         if let Some(ref t) = self.current_track {
             self.client.set_liked(&t.uri, on)?;
         }
+        self.liked = on;
         Ok(())
     }
 
@@ -526,5 +533,31 @@ mod tests {
         assert!(source.next().unwrap() < 0.0);
         source.try_seek(Duration::from_millis(250)).unwrap();
         assert!(source.next().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn audio_body_reader_allows_tracks_larger_than_default_limit() {
+        use std::io::Read;
+
+        let eleven_mb = 11 * 1024 * 1024;
+
+        // Verify that a 10MB limit produces the exact error reported by the user:
+        let limited_body = ureq::Body::builder().reader(std::io::repeat(42).take(eleven_mb));
+        let err = limited_body
+            .into_with_config()
+            .limit(10 * 1024 * 1024)
+            .read_to_vec()
+            .unwrap_err();
+        assert!(err.to_string().contains("the response body is larger than request limit: 10485760"));
+
+        // Verify that with MAX_AUDIO_BYTES, large tracks read successfully:
+        let audio_body = ureq::Body::builder().reader(std::io::repeat(42).take(eleven_mb));
+        let bytes = audio_body
+            .into_with_config()
+            .limit(MAX_AUDIO_BYTES)
+            .read_to_vec()
+            .expect("should read audio bodies larger than 10MB");
+
+        assert_eq!(bytes.len(), eleven_mb as usize);
     }
 }

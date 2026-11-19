@@ -9,6 +9,7 @@
 
 import { Animated, cleanup, type CompositeAnimation, computed, createAnimatedValue, Easing, effect, signal, untracked } from "nsh";
 import { EMPTY_PLAYER, type Item, type PlayerState, positionAt, type RepeatMode, type Track } from "../backend/types";
+import { invalidateLikedSongs } from "../data/queries";
 import { backend } from "./engine";
 import { type MessageId, notify, report } from "./feedback";
 import { askToSignIn, ready, signedIn } from "./session";
@@ -322,7 +323,14 @@ export function cycleRepeat(): void {
 
 export function toggleLike(): void {
   const liked = !player().liked;
-  send({ liked }, () => backend.setLiked(liked), "likeFailed");
+  send(
+    { liked },
+    async () => {
+      await backend.setLiked(liked);
+      invalidateLikedSongs();
+    },
+    "likeFailed",
+  );
 }
 
 /** What shows the moment a track is picked: it is the one loaded and it

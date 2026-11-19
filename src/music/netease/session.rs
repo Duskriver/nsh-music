@@ -21,14 +21,18 @@ use crate::music::{
     session::{Answer, Request, Session, Snapshot},
 };
 
+const QR_POLL_INTERVAL: Duration = Duration::from_millis(1500);
+const QR_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Starts the NetEase Cloud Music native session.
 pub fn start(paths: Paths) -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
     let (requests, queue) = mpsc::channel();
     let client = Arc::new(NetEaseClient::new(&paths.data));
+    let signed_in = client.is_signed_in();
     let initial_snapshot = Snapshot {
         player: Player::default(),
         health: Health::ready(),
-        signed_in: Some(client.is_signed_in()),
+        signed_in: Some(signed_in),
         auth: 0,
     };
 
@@ -43,6 +47,7 @@ pub fn start(paths: Paths) -> (Session, watch::Receiver<Snapshot>, JoinHandle<()
                 client,
                 player: None, // initialized in thread
                 snapshot: initial_snapshot,
+                last_signed_in: signed_in,
                 signing_in: None,
             };
             runner.run();
@@ -54,6 +59,7 @@ pub fn start(paths: Paths) -> (Session, watch::Receiver<Snapshot>, JoinHandle<()
 
 struct SigningInState {
     unikey: String,
+    started_at: Instant,
     last_poll: Instant,
 }
 
@@ -63,6 +69,7 @@ struct NetEaseRunner {
     client: Arc<NetEaseClient>,
     player: Option<PlayerManager>,
     snapshot: Snapshot,
+    last_signed_in: bool,
     signing_in: Option<SigningInState>,
 }
 
@@ -93,7 +100,6 @@ impl NetEaseRunner {
                         let _ = p.pause();
                     }
                     self.snapshot.health = Health::ready();
-                    self.snapshot.auth += 1;
                     self.publish();
                 }
                 Ok(Request::Retry) => {
@@ -123,7 +129,14 @@ impl NetEaseRunner {
 
             // 2. Poll QR login if active
             if let Some(ref state) = self.signing_in {
-                if state.last_poll.elapsed() >= Duration::from_millis(1500) {
+                if state.started_at.elapsed() >= QR_TIMEOUT {
+                    self.signing_in = None;
+                    self.snapshot.health = Health::failed(EngineError::new(
+                        ErrorCode::Timeout,
+                        "二维码已过期，请重新点击登录",
+                    ));
+                    self.publish();
+                } else if state.last_poll.elapsed() >= QR_POLL_INTERVAL {
                     let unikey = state.unikey.clone();
                     self.signing_in.as_mut().unwrap().last_poll = Instant::now();
 
@@ -139,7 +152,11 @@ impl NetEaseRunner {
                         Ok(QrPollResult::Success) => {
                             self.signing_in = None;
                             self.snapshot.health = Health::ready();
-                            self.snapshot.auth += 1;
+                            if self.last_signed_in {
+                                // Account switched while already signed in; bump auth explicitly
+                                // because `publish()` only bumps on signed-in state transitions.
+                                self.snapshot.auth += 1;
+                            }
                             self.publish();
                         }
                         Ok(QrPollResult::Expired) => {
@@ -169,7 +186,12 @@ impl NetEaseRunner {
     }
 
     fn publish(&mut self) {
-        self.snapshot.signed_in = Some(self.client.is_signed_in());
+        let now_signed_in = self.client.is_signed_in();
+        if now_signed_in != self.last_signed_in {
+            self.last_signed_in = now_signed_in;
+            self.snapshot.auth += 1;
+        }
+        self.snapshot.signed_in = Some(now_signed_in);
         if let Some(ref p) = self.player {
             self.snapshot.player = p.state();
         }
@@ -183,9 +205,11 @@ impl NetEaseRunner {
                     qr_image,
                     "请使用网易云音乐手机 App 扫码并在手机上确认登录",
                 );
+                let now = Instant::now();
                 self.signing_in = Some(SigningInState {
                     unikey,
-                    last_poll: Instant::now(),
+                    started_at: now,
+                    last_poll: now,
                 });
             }
             Err(e) => {
@@ -315,19 +339,7 @@ impl NetEaseRunner {
                 Ok(Value::Null)
             }
             Command::PlayContext { uri, track_uri } => {
-                let tracks = if uri == "netease:collection:tracks" {
-                    self.client.liked_songs()?.tracks
-                } else if uri == "netease:playlist:daily" {
-                    self.client.playlist("netease:playlist:daily")?.tracks
-                } else if uri.starts_with("netease:playlist:") {
-                    self.client.playlist(&uri)?.tracks
-                } else if uri.starts_with("netease:album:") {
-                    self.client.album(&uri)?.tracks
-                } else if uri.starts_with("netease:artist:") {
-                    self.client.artist(&uri)?.tracks
-                } else {
-                    Vec::new()
-                };
+                let tracks = self.client.collection_tracks_for_playback(&uri)?;
 
                 if let Some(ref mut p) = self.player {
                     p.play_context(&uri, track_uri.as_deref(), tracks)?;
@@ -362,6 +374,7 @@ mod tests {
             client: client.clone(),
             player: None,
             snapshot,
+            last_signed_in: true,
             signing_in: None,
         };
         assert_eq!(state.borrow().signed_in, Some(true));
@@ -371,5 +384,6 @@ mod tests {
         std::fs::remove_dir(data).unwrap();
 
         assert_eq!(state.borrow().signed_in, Some(false));
+        assert_eq!(state.borrow().auth, 1);
     }
 }

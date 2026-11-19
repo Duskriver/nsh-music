@@ -1,18 +1,25 @@
 // The app's queries: each a cache-first load keyed by the account, loading
 // again with each new epoch (ready, signed in or out, a new token).
 
-import { type Accessor, resource, type Resource } from "nsh";
+import { type Accessor, resource, type Resource, signal } from "nsh";
 import { type CachedQuery, cachedQuery } from "./cache";
 import { type Collection, type Home, kindOf, type Library, type Lyrics, type Me } from "../backend/types";
 import { backend } from "../state/engine";
 import { cacheAccount, dataEpoch } from "../state/session";
 
-function scoped(key: () => string | null) {
+const likedEpoch = signal(0);
+
+/** Triggers a refetch of Liked Songs queries after liking or unliking a track. */
+export function invalidateLikedSongs(): void {
+  likedEpoch.update((n) => n + 1);
+}
+
+function scoped(key: () => string | null, extraEpoch?: (key: string) => number) {
   return () => {
     const account = cacheAccount();
     const k = key();
     if (account === null || k === null) return null;
-    return { account, key: k, epoch: dataEpoch() };
+    return { account, key: k, epoch: dataEpoch() + (extraEpoch ? extraEpoch(k) : 0) };
   };
 }
 
@@ -23,7 +30,9 @@ export function homeQuery(): CachedQuery<Home> {
 
 /** A playlist, album, artist or Liked Songs by URI. */
 export function collectionQuery(uri: () => string | null): CachedQuery<Collection> {
-  return cachedQuery(scoped(uri), (key) => {
+  return cachedQuery(
+    scoped(uri, (k) => (kindOf(k) === "collection" ? likedEpoch() : 0)),
+    (key) => {
     switch (kindOf(key)) {
       case "album":
         return backend.album(key);
