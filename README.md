@@ -48,7 +48,9 @@ irm https://raw.githubusercontent.com/Duskriver/nsh-music/main/website/public/in
 
 - **macOS (Apple Silicon)**：`nsh-music-macos-arm64.dmg`（推荐，双击打开拖拽至 `Applications`）或 `nsh-music-macos-arm64.zip`
 - **Linux (x86_64)**：`nsh-music-linux-x86_64.tar.gz`
-- **Windows (x86_64)**：`nsh-music-windows-x86_64.zip`
+- **Windows (x86_64)**：
+  - `nsh-music-windows-x86_64-setup.exe`（安装包版，推荐：双击向导安装，支持开始菜单/可选桌面快捷方式与系统卸载；安装后可删除安装包，卸载时会连同登录态、缓存和日志一并清除，不留残留）
+  - `nsh-music-windows-x86_64.zip`（绿色便携版：解压后保持目录完整，双击 `nsh-music-portable.cmd` 启动可将登录态、缓存和日志全部隔离在当前 `data\` 目录内，删掉文件夹即彻底清除；直接双击 `nsh-music.exe` 则使用系统 `AppData` 目录）
 
 > [!NOTE]
 > **macOS 首次打开若提示「无法验证开发者」或「已损坏」的解决办法**：

@@ -47,6 +47,27 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
+      # Windows builds use Inno Setup 6 (`ISCC.exe`) so `nsh package` emits both the portable `.zip` and `-setup.exe`.
+      - name: Ensure Inno Setup 6 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          function Find-Iscc {
+            @(
+              (Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+              (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+              (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+              (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+            ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = Find-Iscc
+          }
+          if (-not $iscc) { throw 'ISCC.exe not found after installing Inno Setup 6' }
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       # nsh-music follows NSH's main: the nightly CLI, as in CI (https://nsh.dev/docs/installation).
       - name: Install the NSH CLI (nightly)
         if: runner.os != 'Windows'
@@ -94,7 +115,9 @@ jobs:
           # The installers' archive, and the versioned one for the updater.
           case "$TARGET" in
             linux) mv "$out/nsh-music.tar.gz" "assets/$ASSET"; mv "$out"/nsh-music-*.tar.gz assets/ ;;
-            windows) mv "$out/nsh-music.zip" "assets/$ASSET"; mv "$out"/nsh-music-*.zip assets/ ;;
+            windows)
+              # Assembled in the PowerShell step below so `.iss` and zip paths avoid MSYS path translation.
+              ;;
             macos)
               ditto -c -k --keepParent "$out/nsh-music.app" "assets/$ASSET"
               dmg_dir="$RUNNER_TEMP/dmg"
@@ -107,6 +130,33 @@ jobs:
               ;;
           esac
           ls -l assets
+
+      - name: Assemble Windows setup and portable packages
+        if: matrix.target == 'windows'
+        env:
+          ASSET: ${{ matrix.asset }}
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'out'
+          $iss = Join-Path $out 'nsh-music.iss'
+          # Purge app data, cache, logs and NetEase session on uninstall so setup leaves no residue.
+          @'
+
+          [UninstallDelete]
+          Type: filesandordirs; Name: "{userappdata}\io.github.duskriver.nsh-music"
+          Type: filesandordirs; Name: "{localappdata}\io.github.duskriver.nsh-music"
+          Type: filesandordirs; Name: "{localappdata}\nsh-music"
+          '@ | Add-Content -Path $iss -Encoding Ascii
+          & $env:ISCC_PATH /Q "/O$out" $iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Move-Item -Force (Join-Path $out 'nsh-music-setup.exe') 'assets\nsh-music-windows-x86_64-setup.exe'
+          Get-ChildItem -Path $out -Filter 'nsh-music-*.zip' | Move-Item -Force -Destination 'assets\'
+
+          # Ship the isolated launcher only inside the portable zip, keeping the installed copy clean.
+          Copy-Item -Force 'scripts\nsh-music-portable.cmd' (Join-Path $out 'nsh-music\nsh-music-portable.cmd')
+          Compress-Archive -Path (Join-Path $out 'nsh-music') -DestinationPath (Join-Path 'assets' $env:ASSET) -Force
+          Get-ChildItem -Path 'assets' | Format-Table Name, Length -AutoSize
 
       - name: Verify the macOS package
         if: matrix.target == 'macos'
@@ -135,7 +185,31 @@ jobs:
           case "$RUNNER_OS" in
             Windows)
               powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTALLER"
-              test -f "$LOCALAPPDATA/Programs/nsh-music/nsh-music.exe" ;;
+              test -f "$LOCALAPPDATA/Programs/nsh-music/nsh-music.exe"
+              test -f "$LOCALAPPDATA/Programs/nsh-music/nsh-music-portable.cmd"
+              rm -rf "$LOCALAPPDATA/Programs/nsh-music"
+              powershell -NoProfile -Command '
+                $p = Start-Process -FilePath "assets/nsh-music-windows-x86_64-setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+                if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+              '
+              test -f "$LOCALAPPDATA/Programs/nsh-music/nsh-music.exe"
+              test -f "$LOCALAPPDATA/Programs/nsh-music/unins000.exe"
+              test ! -e "$LOCALAPPDATA/Programs/nsh-music/nsh-music-portable.cmd"
+              mkdir -p "$APPDATA/io.github.duskriver.nsh-music" "$LOCALAPPDATA/io.github.duskriver.nsh-music" "$LOCALAPPDATA/nsh-music"
+              touch "$APPDATA/io.github.duskriver.nsh-music/test" "$LOCALAPPDATA/io.github.duskriver.nsh-music/test" "$LOCALAPPDATA/nsh-music/test"
+              powershell -NoProfile -Command '
+                $app = Join-Path $env:LOCALAPPDATA "Programs\nsh-music"
+                $p = Start-Process -FilePath (Join-Path $app "unins000.exe") -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+                if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+                for ($i = 0; $i -lt 30; $i++) {
+                  if (-not (Test-Path $app)) { break }
+                  Start-Sleep -Milliseconds 500
+                }
+              '
+              test ! -e "$LOCALAPPDATA/Programs/nsh-music"
+              test ! -e "$APPDATA/io.github.duskriver.nsh-music"
+              test ! -e "$LOCALAPPDATA/io.github.duskriver.nsh-music"
+              test ! -e "$LOCALAPPDATA/nsh-music" ;;
             macOS)
               bash "$INSTALLER"
               codesign --verify --deep --strict /Applications/nsh-music.app ;;
@@ -196,8 +270,66 @@ jobs:
           cd assets
           sha256sum * > sha256sums
           cat sha256sums
+
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME"
+          notes="$RUNNER_TEMP/release-notes.md"
+          sed -e "s|__VERSION__|$version|g" -e "s|__BASE__|$base|g" -e "s|__REPO__|$GH_REPO|g" > "$notes" <<'EOF'
+          ## 下载指南 / Downloads
+
+          > 请根据你的系统选择下面**加粗推荐**的文件即可；附件中带版本号的 `nsh-music-__VERSION__-*`、`latest.json` 与 `sha256sums` 供应用内自动更新与校验使用，**普通用户无需手动下载**。
+
+          | 平台 | 推荐下载 | 说明 |
+          | --- | --- | --- |
+          | **Windows (x86_64)** | [**`nsh-music-windows-x86_64-setup.exe`**](__BASE__/nsh-music-windows-x86_64-setup.exe) | **安装包（推荐）**：双击向导安装，支持桌面/开始菜单快捷方式，卸载时全量清除不留残留 |
+          | **Windows (x86_64)** | [`nsh-music-windows-x86_64.zip`](__BASE__/nsh-music-windows-x86_64.zip) | **绿色便携版**：免安装，解压后双击内附 `nsh-music-portable.cmd` 启动，数据全部留在 `data\` 内 |
+          | **macOS (Apple Silicon)** | [**`nsh-music-macos-arm64.dmg`**](__BASE__/nsh-music-macos-arm64.dmg) | **DMG 安装包（推荐）**：打开后将 `nsh-music` 拖入 `Applications` 即可 |
+          | **macOS (Apple Silicon)** | [`nsh-music-macos-arm64.zip`](__BASE__/nsh-music-macos-arm64.zip) | 压缩包版本 |
+          | **Linux (x86_64)** | [**`nsh-music-linux-x86_64.tar.gz`**](__BASE__/nsh-music-linux-x86_64.tar.gz) | 需 GTK 4.14+ 与 ALSA |
+
+          ### 命令行一键安装（自动校验 SHA-256）
+
+          - **Windows (PowerShell)**：
+            ```powershell
+            irm https://raw.githubusercontent.com/__REPO__/main/website/public/install.ps1 | iex
+            ```
+          - **macOS / Linux**：
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/__REPO__/main/website/public/install.sh | bash
+            ```
+
+          > **macOS 首次打开提示「无法验证开发者」或「已损坏」**：可在终端执行 `xattr -cr /Applications/nsh-music.app`，或在访达中按住 Control 右键点击应用选择「打开」。
+          EOF
+
+          if generated="$(gh api "repos/$GH_REPO/releases/generate-notes" -f "tag_name=$GITHUB_REF_NAME" --jq '.body' 2>/dev/null)" && [ -n "$generated" ]; then
+            printf '\n---\n\n%s\n' "$generated" >> "$notes"
+          fi
+
+          upload_args=()
+          for f in *; do
+            case "$f" in
+              nsh-music-windows-x86_64-setup.exe)
+                upload_args+=("$f#Windows (x86_64) 安装包（推荐）— $f") ;;
+              nsh-music-windows-x86_64.zip)
+                upload_args+=("$f#Windows (x86_64) 绿色便携版 — $f") ;;
+              nsh-music-macos-arm64.dmg)
+                upload_args+=("$f#macOS (Apple Silicon) DMG 安装包（推荐）— $f") ;;
+              nsh-music-macos-arm64.zip)
+                upload_args+=("$f#macOS (Apple Silicon) 压缩包 — $f") ;;
+              nsh-music-linux-x86_64.tar.gz)
+                upload_args+=("$f#Linux (x86_64) 压缩包 — $f") ;;
+              sha256sums)
+                upload_args+=("$f#校验文件（SHA-256）— $f") ;;
+              latest.json|nsh-music-"$version"-*)
+                upload_args+=("$f#自动更新组件（无需手动下载）— $f") ;;
+              *)
+                upload_args+=("$f") ;;
+            esac
+          done
+
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" * --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "nsh-music $GITHUB_REF_NAME" --notes-file "$notes"
+            gh release upload "$GITHUB_REF_NAME" "${upload_args[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" * --verify-tag --generate-notes --title "nsh-music $GITHUB_REF_NAME"
+            gh release create "$GITHUB_REF_NAME" "${upload_args[@]}" --verify-tag --notes-file "$notes" --title "nsh-music $GITHUB_REF_NAME"
           fi

@@ -69,7 +69,7 @@ cargo test                             # 仅运行 Rust 单元测试
    git push origin main --tags
    ```
 3. GitHub Actions 会并行在 `macos-15`、`ubuntu-24.04` 和 `windows-latest` 上执行 `nsh package`，生成两套产物并执行安装脚本冒烟测试：
-   - **无版本号安装包**（供 `install.sh`、`install.ps1` 与用户手动下载）：`nsh-music-macos-arm64.dmg`、`nsh-music-macos-arm64.zip`、`nsh-music-linux-x86_64.tar.gz`、`nsh-music-windows-x86_64.zip`
+   - **无版本号安装包**（供 `install.sh`、`install.ps1` 与用户手动下载）：`nsh-music-macos-arm64.dmg`、`nsh-music-macos-arm64.zip`、`nsh-music-linux-x86_64.tar.gz`、`nsh-music-windows-x86_64-setup.exe`（含全量卸载清理 `[UninstallDelete]`）、`nsh-music-windows-x86_64.zip`（内含便携隔离启动脚本 `scripts/nsh-music-portable.cmd`）
    - **带版本号自更新归档与 `latest.json`**（由 `nsh update-manifest` 汇总三端产物生成，供客户端 `src/platform/updater.ts` 后台下载并一键重启更新）
 
 ### 2. 本地打包 (macOS)
