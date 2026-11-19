@@ -50,30 +50,43 @@ import * as nshUpdater from "nsh/updater";
 
 /** Where `checkForUpdates` reports what it found. */
 export interface UpdateOptions {
-  /** Shows `message` to the user, with a button running `action` when
-   * given. */
-  notify(message: string, action?: { label: string; run(): void }): void;
+  /** Shows `message` to the user, with an optional primary `action`
+   * ("Restart", "Download") and a quiet `secondary` choice ("On quit"). */
+  notify(
+    message: string,
+    action?: { label: string; run(): void },
+    secondary?: { label: string; run(): void },
+  ): void;
 }
 
 /** What `checkForUpdates` uses of `nsh/updater` (tests pass their own). */
 export type Updater = Pick<
   typeof nshUpdater,
-  "checkForPackage" | "checkForUpdate" | "downloadPackage" | "downloadUpdate" | "installAndRestart" | "restartToPackage"
+  | "checkForPackage"
+  | "checkForUpdate"
+  | "downloadPackage"
+  | "downloadUpdate"
+  | "installAndRestart"
+  | "installOnQuit"
+  | "restartToPackage"
 >;
 
 let checking = false;
 /** The app version whose archive is downloaded and verified, waiting for
- * the user's Restart; `undefined` until one is. */
+ * the user's Restart or On quit; `undefined` until one is. */
 let downloaded: string | undefined;
+/** The app version already staged with `installOnQuit`, so later checks
+ * don't re-notify for the same update. */
+let staged: string | undefined;
 
 /**
  * Checks for a newer build of the app's TSX (downloaded, it runs from the
  * next start; on the desktops the user can restart into it now), and when
  * there is none, for a newer app. An app this run can install is
  * downloaded first, as a package is, and offered once it is ready: Restart
- * then only installs it, a few seconds, rather than starting a download of
- * a minute or more with nothing on screen that quitting the app abandons.
- * One that cannot be installed (or downloaded) here is offered as a link.
+ * installs and relaunches now, while On quit stages it quietly to swap
+ * when the app exits without interrupting playback. One that cannot be
+ * installed (or downloaded) here is offered as a link.
  * Resolves when done; never rejects. In development runs and on the web
  * it finds nothing.
  */
@@ -94,6 +107,7 @@ export async function checkForUpdates(opts: UpdateOptions, updater: Updater = ns
     }
     const app = await updater.checkForUpdate();
     if (!app) return;
+    if (staged === app.version) return;
     if (app.canInstall) {
       // The same version found again keeps its download (`checkForUpdate`):
       // a later check only offers it again.
@@ -106,10 +120,18 @@ export async function checkForUpdates(opts: UpdateOptions, updater: Updater = ns
         }
       }
       if (downloaded === app.version) {
-        opts.notify(`nsh-music ${app.version} is ready.`, {
-          label: "Restart",
-          run: () => void installApp(app.version, opts, updater),
-        });
+        const readyMessage = app.shell ? `App shell ${app.version} is ready.` : `nsh-music ${app.version} is ready.`;
+        opts.notify(
+          readyMessage,
+          {
+            label: "Restart",
+            run: () => void installApp(app.version, opts, updater),
+          },
+          {
+            label: "On quit",
+            run: () => void stageApp(app.version, opts, updater),
+          },
+        );
         return;
       }
     }
@@ -134,6 +156,20 @@ async function installApp(version: string, opts: UpdateOptions, updater: Updater
     // The next check downloads it again (`checkForUpdate` may have
     // dropped this download for a different archive of the version).
     if (downloaded === version) downloaded = undefined;
+    if (staged === version) staged = undefined;
+    opts.notify("The update could not be installed.");
+  }
+}
+
+async function stageApp(version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
+  try {
+    await updater.installOnQuit();
+    staged = version;
+    opts.notify(`nsh-music ${version} will install on quit.`);
+  } catch (error) {
+    console.warn("update: stage failed:", error);
+    if (downloaded === version) downloaded = undefined;
+    if (staged === version) staged = undefined;
     opts.notify("The update could not be installed.");
   }
 }

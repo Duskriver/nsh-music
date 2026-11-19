@@ -7,13 +7,13 @@ import { Dialog, Sheet } from "nsh/base";
 import { terminal } from "./controls";
 import { enter } from "./motion";
 import { TitleBar } from "./title-bar";
+import { SPRING } from "./tokens";
 
-/** A dialog's entrance: up a little from slightly smaller, settling
- * without overshoot, as the scrim fades. */
+/** A dialog's entrance: up a little from slightly smaller, settling on a
+ * crisp physical spring as the scrim fades. */
 const RISE: MotionSpec = {
   keyframes: { opacity: [0, 1], scale: [0.97, 1], translateY: [10, 0] },
-  duration: 240,
-  easing: "easeOut",
+  spring: SPRING.snappy,
 };
 
 /** The scrim behind a modal surface. */

@@ -59,7 +59,7 @@ function installPlatform() {
   followSystemTheme();
   // The demo (tests, the web, phones) is no release to update.
   if (!isDemo) {
-    const check = () => void checkForUpdates({ notify: (message, action) => announce(message, action) });
+    const check = () => void checkForUpdates({ notify: (message, action, secondary) => announce(message, action, secondary) });
     check();
     const timer = setInterval(check, UPDATE_EVERY);
     cleanup(() => clearInterval(timer));

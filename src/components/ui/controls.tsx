@@ -86,10 +86,9 @@ export const menuItem =
  * hover, press): quick, eased, still with reduced motion. */
 export const LAYER = `transition ${DURATION_CLASS.fast} ${EASE_CLASS.out} motion-reduce:transition-none`;
 
-/** How a control, or a layer of it, presses in and settles back (after
- * affectui's clean button: a short, soft ease-out; still with reduced
- * motion). */
-const PRESS = `transition ${DURATION_CLASS.fast} ${EASE_CLASS.smoothOut} motion-reduce:transition-none`;
+/** How a control, or a layer of it, presses in and settles back on a
+ * firm physical spring; still with reduced motion. */
+const PRESS = `transition ${EASE_CLASS.springPress} motion-reduce:transition-none`;
 
 /** How a wash or a colour comes and goes: quicker than a press. */
 const WASH = `transition ${DURATION_CLASS.instant} ${EASE_CLASS.out} motion-reduce:transition-none`;

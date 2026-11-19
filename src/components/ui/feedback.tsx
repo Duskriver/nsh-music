@@ -7,6 +7,7 @@ import { Button, Toast, type ToastEntry, ToastStack } from "nsh/base";
 import { choose, dismiss, dismissNewest, setToastsExpanded, toastContent, toasts } from "../../state/feedback";
 import { ActionButton, focusRing, terminal } from "./controls";
 import { REVEAL_IN, REVEAL_OUT, SKELETON_PULSE } from "./motion";
+import { EASE_CLASS } from "./tokens";
 
 function ToastItem(props: { entry: ToastEntry }) {
   const content = () => toastContent(props.entry.id);
@@ -19,13 +20,25 @@ function ToastItem(props: { entry: ToastEntry }) {
       class={
         terminal
           ? "flex-1 flex-row items-center gap-2 px-1"
-          : "flex-row items-center gap-3 rounded-(--radius-card) border border-border bg-popover px-4 py-3 shadow-xl transition-all duration-300 ease-out motion-reduce:transition-none"
+          : `flex-row items-center gap-2.5 rounded-(--radius-card) border border-border bg-popover px-4 py-3 shadow-xl transition-all ${EASE_CLASS.springGentle} motion-reduce:transition-none`
       }
       startingClass="opacity-0 translate-y-8 scale-90"
       endingClass="opacity-0 translate-x-12 scale-95"
       swipingClass="transition-none"
     >
       <Text class={terminal ? "flex-1 text-foreground" : "flex-1 text-sm font-medium text-popover-foreground"}>{content()?.text ?? ""}</Text>
+      <If when={content()?.secondaryAction}>
+        {(action) => (
+          <Button
+            onPress={() => choose(props.entry.id, "secondary")}
+            class={`rounded-full px-2.5 py-1 active:opacity-60 ${terminal ? "" : "border border-border bg-secondary"} ${focusRing}`}
+          >
+            <Text class={terminal ? "text-muted-foreground" : "text-xs font-semibold text-foreground"}>
+              {terminal ? `[${action().label}]` : action().label}
+            </Text>
+          </Button>
+        )}
+      </If>
       <If when={content()?.action}>
         {(action) => (
           <Button

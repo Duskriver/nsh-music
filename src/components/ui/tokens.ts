@@ -67,11 +67,33 @@ export const BLUR = {
  * takes it as its `easing`; Tailwind uses `EASE_CLASS.smoothOut`. */
 export const SMOOTH_OUT: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
+/** Physical spring curves (`stiffness`, `damping`, `mass`): they time
+ * themselves until settled, and interrupted motions keep their velocity. */
+export const SPRING = {
+  /** Crisp settle with minimal overshoot: presses, dialogs, breakpoints, sidebar slide. */
+  snappy: { stiffness: 520, damping: 36, mass: 1 },
+  /** Lively pop with subtle overshoot: menus opening, new track cover arrival. */
+  pop: { stiffness: 500, damping: 28, mass: 1 },
+  /** Soft, unhurried settle: toasts and larger surface transitions. */
+  gentle: { stiffness: 380, damping: 30, mass: 1 },
+  /** Quick, controlled exit without bounce: menus closing. */
+  exit: { stiffness: 992, damping: 45, mass: 1 },
+  /** Tactile control press feedback: firm and immediate. */
+  press: { stiffness: 720, damping: 48, mass: 1 },
+} as const;
+
+/** Formats a `SPRING` token for CSS `transitionTimingFunction`. */
+export function springCss(spring: { stiffness: number; damping: number; mass?: number }): `spring(${string})` {
+  return `spring(${spring.stiffness}, ${spring.damping}, ${spring.mass ?? 1})`;
+}
+
 /** Tailwind easing classes for the same tokens. */
 export const EASE_CLASS = {
   out: "ease-out",
   inOut: "ease-in-out",
   smoothOut: "ease-[cubic-bezier(0.22,1,0.36,1)]",
+  springPress: "ease-spring-[720,48]",
+  springGentle: "ease-spring-[380,30]",
 } as const;
 
 /** Tailwind duration classes for the same tokens. */

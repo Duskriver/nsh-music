@@ -496,7 +496,8 @@ in Now Playing).
   press, and its icon moving once.
 - Hover brings only a wash (or a slightly deeper shadow) in, 120ms ease-out;
   never a grow. A press takes a whole button to 0.97 (an icon button's disc
-  and glyph to 0.95) over 180ms on `SMOOTH_OUT`, and the wash deepens.
+  and glyph to 0.95) on a firm physical spring (`SPRING.press`: 720 / 48), and
+  the wash deepens.
 - A labelled button's new label rises 4pt as it fades in (360ms).
 - A glyph that changes (play/pause, repeat, the volume's levels, mute) swaps
   (`SwapIcon`): the old one shrinks to 0.25, blurs 2px and fades as the new
@@ -541,23 +542,24 @@ unliking dips the heart (0.95, 180ms). Nothing plays on a track change.
 ### Surfaces
 
 - **Sidebar selection**: transitions.dev's "Tabs sliding". One background per
-  panel slides to the selected row (240ms ease-in-out). In the library it
-  follows the list's scroll natively and is clipped by the panel. With no
-  selection in a panel it fades away; between panels one fades out as the
-  other fades in.
+  panel springs to the selected row (`SPRING.snappy`: 520 / 36, keeping its
+  velocity when interrupted). In the library it follows the list's scroll
+  natively and is clipped by the panel. With no selection in a panel it fades
+  away; between panels one fades out as the other fades in.
 - **Menus**: transitions.dev's "Dropdown menu morph" (`src/components/ui/menu.ts`).
   The popup grows out of the trigger's nearest corner, slid 8pt toward it,
-  from 0.97 and 2px blur, fading in over 360ms on
-  `cubic-bezier(0.34, 1.25, 0.64, 1)`; it leaves the same way in 240ms without
-  the overshoot.
-- **Dialogs** rise 10pt from 0.97 and fade in (240ms) as the scrim fades.
-  **Toasts** slide up in and out to the right.
+  from 0.97 and 2px blur, fading in on a lively physical spring (`SPRING.pop`:
+  500 / 28); it leaves the same way on a crisp exit spring (`SPRING.exit`:
+  992 / 45) without overshoot.
+- **Dialogs** rise 10pt from 0.97 and fade in on `SPRING.snappy` as the scrim
+  fades. **Toasts** slide up in and out to the right on `SPRING.gentle`
+  (380 / 30).
 - **Navigation** follows history: a page already in the stack animates back,
   a page ahead forward. Sidebar switches cross-fade.
-- **Breakpoints** (`animateLayoutOn`): what moves glides, what comes or goes
-  fades, 240ms ease-in-out. Not on every resize.
-- **A new track**: the cover settles in with a small overshoot (420ms), the
-  words rise after it (320ms, 80ms later).
+- **Breakpoints** (`animateLayoutOn`): what moves glides on `SPRING.snappy`,
+  what comes or goes fades over 240ms. Not on every resize.
+- **A new track**: the cover springs in (`SPRING.pop`, inheriting velocity if
+  skipped quickly), the words rise after it (`SPRING.snappy`, 80ms later).
 - **Now Playing opens** in layers: the cover zooms in, then the words, the
   position and the transport rise one after another.
 

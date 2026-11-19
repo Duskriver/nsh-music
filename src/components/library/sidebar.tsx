@@ -18,7 +18,7 @@ import { ErrorState, LibrarySkeleton, Reveal } from "../ui/feedback";
 import { Icon, iconMotion, type IconName } from "../ui/icons";
 import { PlayingBars } from "../ui/playing";
 import { createListWave, listItemEntrance, type ListWave, WAVE } from "../ui/motion";
-import { DURATION, EASING } from "../ui/tokens";
+import { DURATION, EASING, SPRING } from "../ui/tokens";
 import { menuPopupHidden, menuPopupLeaving, menuPopupStyle } from "../ui/menu";
 import { fallbackIcon } from "./cards";
 import { accountMenuWidth, layout } from "../layout";
@@ -65,7 +65,7 @@ function SlidingSelection(props: { index: () => number; top: number; scroll?: An
         return;
       }
       if (from < 0) motion.translateY.set(y);
-      else void motion.translateY.timing(y, timing);
+      else void motion.translateY.spring(y, SPRING.snappy);
       void motion.opacity.timing(1, timing);
     });
   });

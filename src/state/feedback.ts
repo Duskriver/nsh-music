@@ -28,6 +28,7 @@ export interface ToastAction {
 export interface ToastContent {
   text: string;
   action?: ToastAction;
+  secondaryAction?: ToastAction;
 }
 
 /** How many show at once. */
@@ -70,10 +71,10 @@ export function notify(id: MessageId, action?: ToastAction): void {
 
 /** Shows a message that is not in the catalog (the updater's, which words
  * its own); the same text again replaces it. */
-export function announce(text: string, action?: ToastAction): void {
+export function announce(text: string, action?: ToastAction, secondaryAction?: ToastAction): void {
   const id = `text:${text}`;
-  contents.set({ ...contents(), [id]: { text, action } });
-  manager.push(id, id, { timeout: action ? TIMEOUT * 2 : TIMEOUT });
+  contents.set({ ...contents(), [id]: { text, action, secondaryAction } });
+  manager.push(id, id, { timeout: action || secondaryAction ? TIMEOUT * 2 : TIMEOUT });
   sync();
   ticking ??= setInterval(tick, TICK);
 }
@@ -103,9 +104,10 @@ export function dismissNewest(): void {
   if (newest) dismiss(newest.id);
 }
 
-/** Runs a toast's action and closes it. */
-export function choose(id: string): void {
-  const action = contents()[id]?.action;
+/** Runs a toast's primary or secondary action and closes it. */
+export function choose(id: string, which: "primary" | "secondary" = "primary"): void {
+  const content = contents()[id];
+  const action = which === "secondary" ? content?.secondaryAction : content?.action;
   dismiss(id);
   action?.run();
 }

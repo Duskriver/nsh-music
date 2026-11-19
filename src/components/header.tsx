@@ -6,7 +6,7 @@ import { createMotion, signal, Text, token, untracked, View } from "nsh";
 import { Input, Toolbar } from "nsh/base";
 import { Region } from "./ui/regions";
 import { back, canBack, canForward, currentRoute, forward, open, SEARCH } from "../nav";
-import { DISTANCE, DURATION, EASING } from "./ui/tokens";
+import { DISTANCE, SPRING } from "./ui/tokens";
 import { query } from "../state/search";
 import { Icon } from "./ui/icons";
 import { signedIn, signIn } from "../state/session";
@@ -55,8 +55,7 @@ function SearchBox(props: { onSearch: boolean; onDone: () => void }) {
       : createMotion({
           enter: {
             keyframes: { opacity: [0, 1], scaleX: [0.7, 1], translateX: [DISTANCE.large, 0] },
-            duration: DURATION.base,
-            easing: EASING.out,
+            spring: SPRING.snappy,
           },
         }).style,
   );

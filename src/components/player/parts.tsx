@@ -31,7 +31,7 @@ import { Digits } from "../ui/digits";
 import { BarSlider, Cover, focusRing, IconButton, PlayButton, terminal } from "../ui/controls";
 import type { IconName } from "../ui/icons";
 import { lazyMotion } from "../ui/motion";
-import { DURATION, EASING, SCALE } from "../ui/tokens";
+import { DURATION, EASING, SCALE, SPRING } from "../ui/tokens";
 
 const REPEAT_LABEL = { off: "Repeat", context: "Repeat one", track: "Don't repeat" } as const;
 
@@ -298,25 +298,16 @@ function burst(i: number, k: number): MotionSpec {
   };
 }
 
-/** A new track's arrival: the cover settles in with a small overshoot,
- * the words rise after it. */
+/** A new track's arrival: the cover springs in with a natural overshoot
+ * (inheriting velocity if skipped quickly), and the words follow. */
 export const NEW_COVER: MotionSpec = {
-  keyframes: [
-    { opacity: 0.4, scale: 0.9 },
-    { opacity: 1, scale: 1.04 },
-    { opacity: 1, scale: 1 },
-  ],
-  duration: 420,
-  easing: "easeOut",
+  keyframes: { opacity: [0.4, 1], scale: [0.9, 1] },
+  spring: SPRING.pop,
 };
 const NEW_WORDS: MotionSpec = {
-  keyframes: [
-    { opacity: 0, translateY: 6 },
-    { opacity: 1, translateY: 0 },
-  ],
-  duration: 320,
+  keyframes: { opacity: [0, 1], translateY: [6, 0] },
   delay: 80,
-  easing: "easeOut",
+  spring: SPRING.snappy,
 };
 
 /** What plays: the cover (`cover` points; 0 for none), which opens Now

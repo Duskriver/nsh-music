@@ -27,7 +27,7 @@ import {
   type MotionOptions,
   type MotionSpec,
 } from "nsh";
-import { DURATION, EASING } from "./tokens";
+import { DURATION, EASING, SPRING } from "./tokens";
 
 /** A style that plays `preset` once when the view mounts; spread it into
  * `style`. Call it in a component body, or on a plain host view whose style
@@ -526,12 +526,12 @@ export function animateLayoutOn(step: () => string): void {
   effect(() => {
     const now = step();
     if (last !== null && now !== last && !reduceMotion()) {
-      const curve = { type: "easeInEaseOut" as const };
+      const fade = { type: "easeInEaseOut" as const, property: "opacity" as const };
       LayoutAnimation.configureNext({
         duration: DURATION.base,
-        update: curve,
-        create: { ...curve, property: "opacity" },
-        delete: { ...curve, property: "opacity" },
+        update: { type: "spring" as const, ...SPRING.snappy },
+        create: fade,
+        delete: fade,
       });
     }
     last = now;

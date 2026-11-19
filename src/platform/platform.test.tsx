@@ -124,14 +124,24 @@ describe("updates", () => {
 
   /** An app update of `version` through a fake `nsh/updater`; `steps` gets
    * each call and message in order. */
-  function fakeUpdater(version: string, steps: string[], fail: { download?: boolean; install?: boolean } = {}): Updater {
+  function fakeUpdater(
+    version: string,
+    steps: string[],
+    fail: { download?: boolean; install?: boolean; stage?: boolean; shell?: boolean } = {},
+  ): Updater {
     return {
       checkForPackage: async () => null,
       downloadPackage: async () => undefined,
       restartToPackage: async () => undefined,
       checkForUpdate: async () => {
         steps.push("check");
-        return { version, notes: null, url: `https://example.invalid/nsh-music-${version}.tar.gz`, canInstall: true };
+        return {
+          version,
+          notes: null,
+          url: `https://example.invalid/nsh-music-${version}.tar.gz`,
+          canInstall: true,
+          shell: fail.shell ?? false,
+        };
       },
       downloadUpdate: async () => {
         steps.push("download");
@@ -142,18 +152,31 @@ describe("updates", () => {
         if (fail.install) throw new Error("its code signature is not valid");
         return new Promise<void>(() => undefined); // Restarts: never settles.
       },
+      installOnQuit: async () => {
+        steps.push("stage");
+        if (fail.stage) throw new Error("its code signature is not valid");
+      },
     } as unknown as Updater;
   }
 
-  /** A `notify` that logs into `steps` and keeps the last action. */
-  function recorder(steps: string[]) {
-    const last: { action?: { label: string; run(): void } } = {};
+  /** A `notify` that logs into `steps` and keeps the last actions. */
+  function recorder(steps: string[], includeSecondary = false) {
+    const last: { action?: { label: string; run(): void }; secondary?: { label: string; run(): void } } = {};
     return {
       last,
       opts: {
-        notify(message: string, action?: { label: string; run(): void }) {
-          steps.push(action ? `${message} [${action.label}]` : message);
+        notify(
+          message: string,
+          action?: { label: string; run(): void },
+          secondary?: { label: string; run(): void },
+        ) {
+          const labels = [
+            includeSecondary && secondary ? `[${secondary.label}]` : "",
+            action ? `[${action.label}]` : "",
+          ].filter(Boolean);
+          steps.push(labels.length ? `${message} ${labels.join(" ")}` : message);
           last.action = action;
+          last.secondary = secondary;
         },
       },
     };
@@ -200,5 +223,44 @@ describe("updates", () => {
     // The next check downloads it again rather than offering what may be gone.
     await checkForUpdates(opts, fakeUpdater("9.3.0", steps));
     expect(steps.slice(6)).toEqual(["check", "download", "nsh-music 9.3.0 is ready. [Restart]"]);
+  });
+
+  test("On quit stages the update without restarting and quiets later checks", async () => {
+    const steps: string[] = [];
+    const updater = fakeUpdater("9.4.0", steps);
+    const { last, opts } = recorder(steps, true);
+    await checkForUpdates(opts, updater);
+    expect(steps).toEqual(["check", "download", "nsh-music 9.4.0 is ready. [On quit] [Restart]"]);
+    last.secondary?.run();
+    await settle();
+    expect(steps.slice(3)).toEqual(["stage", "nsh-music 9.4.0 will install on quit."]);
+    // Already staged for quit: a later check does not re-download or notify again.
+    await checkForUpdates(opts, updater);
+    expect(steps).toEqual([
+      "check",
+      "download",
+      "nsh-music 9.4.0 is ready. [On quit] [Restart]",
+      "stage",
+      "nsh-music 9.4.0 will install on quit.",
+      "check",
+    ]);
+  });
+
+  test("a stage that fails says so and lets the next check try again", async () => {
+    const steps: string[] = [];
+    const { last, opts } = recorder(steps, true);
+    await checkForUpdates(opts, fakeUpdater("9.5.0", steps, { stage: true }));
+    last.secondary?.run();
+    await settle();
+    expect(steps.slice(3)).toEqual(["stage", "The update could not be installed."]);
+    await checkForUpdates(opts, fakeUpdater("9.5.0", steps));
+    expect(steps.slice(5)).toEqual(["check", "download", "nsh-music 9.5.0 is ready. [On quit] [Restart]"]);
+  });
+
+  test("shell-only updates name the app shell", async () => {
+    const steps: string[] = [];
+    const { opts } = recorder(steps, true);
+    await checkForUpdates(opts, fakeUpdater("9.6.0", steps, { shell: true }));
+    expect(steps).toEqual(["check", "download", "App shell 9.6.0 is ready. [On quit] [Restart]"]);
   });
 });

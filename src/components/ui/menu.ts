@@ -14,13 +14,13 @@
 import { reduceMotion } from "nsh";
 import type { Align, Placement } from "nsh/base";
 import type { ViewStyle } from "nsh";
-import { DISTANCE, DURATION } from "./tokens";
+import { DISTANCE, SPRING, springCss } from "./tokens";
 
-/** The morph's own curves (its `--morph-ease`, `--morph-close-ease`):
- * opening overshoots a little and settles; closing eases out. */
+/** The morph's own spring curves: opening settles with a light physical
+ * pop; closing leaves swiftly without bounce. */
 export const MENU_EASE = {
-  open: "cubic-bezier(0.34, 1.25, 0.64, 1)",
-  close: "cubic-bezier(0.22, 1, 0.36, 1)",
+  open: springCss(SPRING.pop),
+  close: springCss(SPRING.exit),
 } as const;
 
 /** How small the popup starts (`--morph-scale`) and how blurred
@@ -30,14 +30,13 @@ const START_BLUR = 2;
 
 const MOVING = "opacity, transform, filter";
 
-/** The popup at rest: how it moves into place (open: 350ms in the morph,
- * here `DURATION.slow`). */
+/** The popup at rest: how it moves into place on a physical spring that
+ * times itself until settled. */
 export function menuPopupStyle(placement: Placement, align: Align = "start"): ViewStyle {
   if (reduceMotion()) return { transitionProperty: "none" };
   return {
     transformOrigin: origin(placement, align),
     transitionProperty: MOVING,
-    transitionDuration: DURATION.slow,
     transitionTimingFunction: MENU_EASE.open,
   };
 }
@@ -75,13 +74,12 @@ export function menuPopupHidden(placement: Placement, align: Align = "start"): V
   return hidden(placement, align);
 }
 
-/** The popup while it goes: back the way it came, quicker (close: 250ms in
- * the morph, here `DURATION.base`) and without the overshoot. */
+/** The popup while it goes: back the way it came on a crisp exit spring,
+ * without overshoot. */
 export function menuPopupLeaving(placement: Placement, align: Align = "start"): ViewStyle {
   if (reduceMotion()) return { opacity: 0 };
   return {
     ...hidden(placement, align),
-    transitionDuration: DURATION.base,
     transitionTimingFunction: MENU_EASE.close,
   };
 }
