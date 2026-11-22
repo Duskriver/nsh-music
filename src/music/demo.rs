@@ -2,12 +2,11 @@
 
 use std::thread::JoinHandle;
 
-use serde_json::{Value, json};
 use tokio::sync::watch;
 
 use super::{
-    command::Command,
-    model::{Player, Repeat, Track},
+    command::{Command, CommandOutput},
+    model::{Collection, CoverColor, Header, Home, Item, Library, LyricLine, Lyrics, Me, Player, Repeat, SearchResults, Track},
     session::{Answer, Session, Snapshot},
 };
 
@@ -17,12 +16,12 @@ const PLAYLIST: &str = include_str!("fixtures/playlist.json");
 const ALBUM: &str = include_str!("fixtures/album.json");
 const ARTIST: &str = include_str!("fixtures/artist.json");
 
-fn parse(text: &str) -> Value {
-    serde_json::from_str(text).expect("a fixture is JSON")
+fn parse<T: serde::de::DeserializeOwned>(text: &str) -> T {
+    serde_json::from_str(text).expect("a fixture is valid JSON")
 }
 
 /// Made-up lyrics, timed every four seconds, for any track.
-fn demo_lyrics() -> Value {
+fn demo_lyrics() -> Lyrics {
     const WORDS: [&str; 12] = [
         "♪",
         "Streetlights hum a quiet tune",
@@ -37,56 +36,68 @@ fn demo_lyrics() -> Value {
         "Streetlights hum a quiet tune",
         "And the night lets us go home",
     ];
-    let lines: Vec<Value> = WORDS
+    let lines = WORDS
         .iter()
         .enumerate()
-        .map(|(i, words)| json!({ "startMs": i as f64 * 4000.0, "words": words }))
+        .map(|(i, words)| LyricLine { start_ms: i as f64 * 4000.0, words: (*words).to_string() })
         .collect();
-    json!({ "synced": true, "lines": lines, "provider": "Demo" })
+    Lyrics { synced: true, lines, provider: "Demo".to_string() }
 }
 
 /// The sample response for `command`.
 pub fn answer(command: &Command) -> Answer {
     match command {
-        Command::Home => Ok(parse(HOME)),
+        Command::Home => Ok(CommandOutput::Home(parse(HOME))),
         Command::Search(term) => {
             let term = term.trim().to_lowercase();
             if term.is_empty() || term == "nothing at all" {
-                Ok(json!({ "tracks": [], "artists": [], "albums": [], "playlists": [] }))
+                Ok(CommandOutput::Search(SearchResults::default()))
             } else {
-                Ok(parse(SEARCH))
+                Ok(CommandOutput::Search(parse(SEARCH)))
             }
         }
-        Command::Me => Ok(json!({ "id": "demo", "name": "Demo Listener", "username": "demo", "image": "" })),
-        Command::Colors(_) => Ok(json!({ "hex": "", "palette": [] })),
-        Command::Lyrics(_) => Ok(demo_lyrics()),
+        Command::Me => Ok(CommandOutput::Me(Me {
+            id: "demo".to_string(),
+            name: "Demo Listener".to_string(),
+            username: "demo".to_string(),
+            image: String::new(),
+        })),
+        Command::Colors(_) => Ok(CommandOutput::Colors(CoverColor::default())),
+        Command::Lyrics(_) => Ok(CommandOutput::Lyrics(demo_lyrics())),
         Command::Library => {
-            let home = parse(HOME);
-            let mut items = vec![json!({
-                "uri": "netease:collection:tracks", "kind": "collection", "name": "Liked Songs",
-                "subtitle": "2 songs", "image": ""
-            })];
-            for section in home["sections"].as_array().into_iter().flatten() {
-                for item in section["items"].as_array().into_iter().flatten() {
-                    if matches!(item["kind"].as_str(), Some("playlist" | "album" | "artist")) && items.len() < 14 {
-                        items.push(item.clone());
+            let home: Home = parse(HOME);
+            let mut items = vec![Item {
+                uri: "netease:collection:tracks".to_string(),
+                kind: "collection".to_string(),
+                name: "Liked Songs".to_string(),
+                subtitle: "2 songs".to_string(),
+                image: String::new(),
+            }];
+            for section in home.sections {
+                for item in section.items {
+                    if matches!(item.kind.as_str(), "playlist" | "album" | "artist") && items.len() < 14 {
+                        items.push(item);
                     }
                 }
             }
-            Ok(json!({ "items": items }))
+            Ok(CommandOutput::Library(Library { items }))
         }
-        Command::Playlist(_) => Ok(parse(PLAYLIST)),
-        Command::Album(_) => Ok(parse(ALBUM)),
-        Command::Artist(_) => Ok(parse(ARTIST)),
+        Command::Playlist(_) => Ok(CommandOutput::Collection(parse(PLAYLIST))),
+        Command::Album(_) => Ok(CommandOutput::Collection(parse(ALBUM))),
+        Command::Artist(_) => Ok(CommandOutput::Collection(parse(ARTIST))),
         Command::LikedSongs => {
-            let mut album = parse(ALBUM);
-            album["header"] = json!({
-                "uri": "netease:collection:tracks", "kind": "collection", "name": "Liked Songs",
-                "subtitle": "2 songs", "image": "", "description": ""
-            });
-            Ok(album)
+            let mut album: Collection = parse(ALBUM);
+            album.header = Header {
+                uri: "netease:collection:tracks".to_string(),
+                kind: "collection".to_string(),
+                name: "Liked Songs".to_string(),
+                subtitle: "2 songs".to_string(),
+                image: String::new(),
+                description: String::new(),
+            };
+            Ok(CommandOutput::Collection(album))
         }
-        _ => Ok(Value::Null),
+        _ => Ok(CommandOutput::Unit),
     }
 }
 
@@ -101,6 +112,7 @@ pub fn control(player: &mut Player, command: &Command) -> bool {
         Command::SetVolume(v) => player.volume = v.clamp(0.0, 1.0),
         Command::SetShuffle(on) => player.shuffle = *on,
         Command::SetRepeat(mode) => player.repeat = *mode,
+        Command::SetQuality(quality) => player.quality = *quality,
         Command::SetLiked(on) => player.liked = *on,
         Command::SetMuted(on) => player.muted = *on,
         Command::PlayContext { .. } | Command::PlayTrack(_) => player.playing = true,
@@ -120,8 +132,8 @@ fn now_ms() -> f64 {
 
 /// The demo's player: the first track of the sample album, paused.
 pub fn player() -> Player {
-    let album: Value = parse(ALBUM);
-    let track: Track = serde_json::from_value(album["tracks"][0].clone()).unwrap_or_default();
+    let album: Collection = parse(ALBUM);
+    let track: Track = album.tracks.into_iter().next().unwrap_or_default();
     Player {
         title: track.name,
         artist: track.artists,
@@ -151,24 +163,25 @@ pub fn session() -> (Session, watch::Receiver<Snapshot>, JoinHandle<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::music::{
-        command::decode,
-        model::{Collection, Home, Library, Me, SearchResults},
-    };
+    use crate::music::model::{Collection, Home, Library, Me, SearchResults};
 
     #[test]
     fn every_answer_has_its_type() {
-        let home: Home = decode(&Command::Home, answer(&Command::Home).unwrap()).unwrap();
+        let home: Home = answer(&Command::Home).unwrap().into_home(&Command::Home).unwrap();
         assert!(!home.sections.is_empty());
-        let found: SearchResults =
-            decode(&Command::Home, answer(&Command::Search("kites".into())).unwrap()).unwrap();
+        let found: SearchResults = answer(&Command::Search("kites".into()))
+            .unwrap()
+            .into_search(&Command::Search("kites".into()))
+            .unwrap();
         assert!(!found.is_empty());
-        let none: SearchResults =
-            decode(&Command::Home, answer(&Command::Search("nothing at all".into())).unwrap()).unwrap();
+        let none: SearchResults = answer(&Command::Search("nothing at all".into()))
+            .unwrap()
+            .into_search(&Command::Search("nothing at all".into()))
+            .unwrap();
         assert!(none.is_empty());
-        let me: Me = decode(&Command::Me, answer(&Command::Me).unwrap()).unwrap();
+        let me: Me = answer(&Command::Me).unwrap().into_me(&Command::Me).unwrap();
         assert_eq!(me.id, "demo");
-        let library: Library = decode(&Command::Library, answer(&Command::Library).unwrap()).unwrap();
+        let library: Library = answer(&Command::Library).unwrap().into_library(&Command::Library).unwrap();
         assert!(library.items.len() > 1 && library.items[0].opens());
         for c in [
             Command::Playlist("p".into()),
@@ -176,7 +189,7 @@ mod tests {
             Command::Artist("a".into()),
             Command::LikedSongs,
         ] {
-            let page: Collection = decode(&c, answer(&c).unwrap()).unwrap();
+            let page: Collection = answer(&c).unwrap().into_collection(&c).unwrap();
             assert!(!page.tracks.is_empty(), "{c:?}");
         }
     }

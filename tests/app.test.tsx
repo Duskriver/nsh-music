@@ -321,3 +321,18 @@ test("the music light switches to Current, and Random picks another for each tra
   await app.press("id:player >> role:button[Next]");
   await app.waitUntil(() => shown() !== undefined && shown() !== first);
 });
+
+test("audio quality switches and persists", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.waitFor("id:player >> role:button[Audio quality: High]");
+
+  await app.press("id:player >> role:button[Audio quality: High]");
+  await app.press("role:menuitemradio[SQ Lossless FLAC]");
+  await app.waitFor("id:player >> role:button[Audio quality: Lossless]");
+  expect(app.storage()["player:quality"]).toBe("lossless");
+
+  // Reopening with saved storage restores the selected quality.
+  const reopened = await desktop({}, { ...LAUNCHED, "player:quality": "hires" });
+  await reopened.waitFor("id:player >> role:button[Audio quality: Hi-Res]");
+});

@@ -3,10 +3,11 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::{self, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,8 +17,8 @@ use serde_json::{Value, json};
 
 use super::crypto::eapi_encrypt;
 use crate::music::model::{
-    Collection, ErrorCode, EngineError, Header, Home, Item, Library, LyricLine, Lyrics, Me,
-    SearchResults, Section, Track,
+    AudioQuality, Collection, ErrorCode, EngineError, Header, Home, Item, Library, LyricLine,
+    Lyrics, Me, SearchResults, Section, Track,
 };
 
 const SITE: &str = "https://music.163.com";
@@ -32,9 +33,12 @@ const EAPI_COOKIE_ENCODING: &percent_encoding::AsciiSet = &percent_encoding::NON
     .remove(b'*').remove(b'\'').remove(b'(').remove(b')');
 const COOKIE_NAMES: [&str; 3] = ["MUSIC_U", "__csrf", "NMTID"];
 const PROFILE_TTL: Duration = Duration::from_secs(60);
-const LIKED_TTL: Duration = Duration::from_secs(60);
-const COLLECTION_PLAYBACK_TTL: Duration = Duration::from_secs(60);
+const LIKED_TTL: Duration = Duration::from_secs(300);
+const COLLECTION_PLAYBACK_TTL: Duration = Duration::from_secs(600);
 const STREAM_TTL: Duration = Duration::from_secs(600);
+const TRACK_CACHE_MAX: usize = 2000;
+const STREAM_PREBUFFER_BYTES: usize = 32 * 1024;
+const STREAM_CHUNK_BYTES: usize = 32 * 1024;
 const PLAYLIST_PREVIEW_LIMIT: usize = 1000;
 const SONG_DETAIL_BATCH: usize = 400;
 const SONG_DETAIL_CONCURRENCY: usize = 4;
@@ -77,6 +81,187 @@ struct LikedCache {
     at: Instant,
 }
 
+type StreamInflightEntry = Arc<(Mutex<Option<Result<String, EngineError>>>, Condvar)>;
+
+#[derive(Default)]
+struct StreamBufferInner {
+    data: Vec<u8>,
+    eof: bool,
+    error: Option<String>,
+    cancelled: bool,
+    total_len: Option<u64>,
+}
+
+struct StreamBuffer {
+    inner: Mutex<StreamBufferInner>,
+    cvar: Condvar,
+}
+
+impl StreamBuffer {
+    fn new(total_len: Option<u64>) -> Arc<Self> {
+        let initial_cap = total_len
+            .map(|n| n.min(8 * 1024 * 1024) as usize)
+            .unwrap_or(64 * 1024);
+        Arc::new(StreamBuffer {
+            inner: Mutex::new(StreamBufferInner {
+                data: Vec::with_capacity(initial_cap),
+                eof: false,
+                error: None,
+                cancelled: false,
+                total_len,
+            }),
+            cvar: Condvar::new(),
+        })
+    }
+
+    fn cancel(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.cancelled {
+            inner.cancelled = true;
+            self.cvar.notify_all();
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.inner.lock().unwrap().cancelled
+    }
+
+    fn push_chunk(&self, chunk: &[u8]) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.cancelled {
+            return;
+        }
+        inner.data.extend_from_slice(chunk);
+        self.cvar.notify_all();
+    }
+
+    fn finish_eof(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.eof = true;
+        self.cvar.notify_all();
+    }
+
+    fn finish_error(&self, message: String) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.error = Some(message);
+        self.cvar.notify_all();
+    }
+
+    fn wait_prebuffer(&self, min_bytes: usize) -> Result<(), EngineError> {
+        let mut inner = self.inner.lock().unwrap();
+        while inner.data.len() < min_bytes && !inner.eof && inner.error.is_none() && !inner.cancelled {
+            inner = self.cvar.wait(inner).unwrap();
+        }
+        if inner.cancelled {
+            return Err(EngineError::new(ErrorCode::Internal, "音频加载已取消"));
+        }
+        if inner.data.is_empty() {
+            if let Some(ref err) = inner.error {
+                return Err(EngineError::new(ErrorCode::Shape, err.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Handle for aborting an active progressive audio stream download and unblocking readers.
+#[derive(Clone)]
+pub struct StreamCancelHandle {
+    buffer: Arc<StreamBuffer>,
+}
+
+impl StreamCancelHandle {
+    /// Cancels the background download and wakes any blocked reader with EOF.
+    pub fn cancel(&self) {
+        self.buffer.cancel();
+    }
+}
+
+/// A `Read + Seek` stream backed by an in-memory buffer populated progressively from HTTP.
+pub struct ProgressiveStreamReader {
+    buffer: Arc<StreamBuffer>,
+    pos: u64,
+}
+
+impl Read for ProgressiveStreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut inner = self.buffer.inner.lock().unwrap();
+        loop {
+            if inner.cancelled {
+                return Ok(0);
+            }
+            let pos = self.pos as usize;
+            if pos < inner.data.len() {
+                let n = buf.len().min(inner.data.len() - pos);
+                buf[..n].copy_from_slice(&inner.data[pos..pos + n]);
+                self.pos += n as u64;
+                return Ok(n);
+            }
+            if let Some(ref err) = inner.error {
+                return Err(io::Error::other(err.clone()));
+            }
+            if inner.eof {
+                return Ok(0);
+            }
+            inner = self.buffer.cvar.wait(inner).unwrap();
+        }
+    }
+}
+
+impl Seek for ProgressiveStreamReader {
+    fn seek(&mut self, style: SeekFrom) -> io::Result<u64> {
+        let mut inner = self.buffer.inner.lock().unwrap();
+        let target: i64 = match style {
+            SeekFrom::Start(offset) => i64::try_from(offset)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "seek overflow"))?,
+            SeekFrom::Current(delta) => (self.pos as i64)
+                .checked_add(delta)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek overflow"))?,
+            SeekFrom::End(delta) => {
+                let end = if let Some(total) = inner.total_len {
+                    total
+                } else {
+                    while !inner.eof && !inner.cancelled && inner.error.is_none() {
+                        inner = self.buffer.cvar.wait(inner).unwrap();
+                    }
+                    if inner.cancelled {
+                        return Err(io::Error::new(io::ErrorKind::BrokenPipe, "stream cancelled"));
+                    }
+                    if let Some(ref err) = inner.error {
+                        return Err(io::Error::other(err.clone()));
+                    }
+                    inner.data.len() as u64
+                };
+                (end as i64)
+                    .checked_add(delta)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek overflow"))?
+            }
+        };
+        if target < 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "negative seek"));
+        }
+        self.pos = target as u64;
+        Ok(self.pos)
+    }
+}
+
+/// An opened progressive HTTP audio stream ready for immediate decoding.
+pub struct ProgressiveAudioStream {
+    /// Reader for `rodio::Decoder`.
+    pub reader: ProgressiveStreamReader,
+    /// Total byte length when known from `Content-Length`.
+    pub byte_len: Option<u64>,
+    /// File extension hint (e.g. `"mp3"`, `"flac"`).
+    pub hint: Option<String>,
+    /// MIME type hint (e.g. `"audio/mpeg"`).
+    pub mime_type: Option<String>,
+    /// Handle to cancel the stream download when switching tracks.
+    pub cancel: StreamCancelHandle,
+}
+
 /// The NetEase API client.
 pub struct NetEaseClient {
     session_file: PathBuf,
@@ -88,7 +273,11 @@ pub struct NetEaseClient {
     agent: ureq::Agent,
     download_agent: ureq::Agent,
     stream_cache: Mutex<HashMap<u64, (String, Instant)>>,
+    stream_inflight: Mutex<HashMap<u64, StreamInflightEntry>>,
+    quality: AtomicU8,
+    track_cache: Mutex<HashMap<String, (Track, Instant)>>,
     liked_cache: Mutex<Option<LikedCache>>,
+    liked_refreshing: AtomicBool,
     liked_playlist_id: Mutex<Option<(String, String)>>,
     collection_cache: Mutex<HashMap<String, (Collection, Instant)>>,
 }
@@ -395,7 +584,7 @@ impl NetEaseClient {
         let download_agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(10)))
             .timeout_per_read(Some(Duration::from_secs(15)))
-            .timeout_global(Some(Duration::from_secs(60)))
+            .timeout_global(Some(Duration::from_secs(600)))
             .http_status_as_error(false)
             .build()
             .into();
@@ -410,7 +599,11 @@ impl NetEaseClient {
             agent,
             download_agent,
             stream_cache: Mutex::new(HashMap::new()),
+            stream_inflight: Mutex::new(HashMap::new()),
+            quality: AtomicU8::new(AudioQuality::default().to_u8()),
+            track_cache: Mutex::new(HashMap::new()),
             liked_cache: Mutex::new(None),
+            liked_refreshing: AtomicBool::new(false),
             liked_playlist_id: Mutex::new(None),
             collection_cache: Mutex::new(HashMap::new()),
         }
@@ -455,6 +648,7 @@ impl NetEaseClient {
         *self.profile.lock().unwrap() = None;
         *self.profile_checked_at.lock().unwrap() = None;
         self.stream_cache.lock().unwrap().clear();
+        self.track_cache.lock().unwrap().clear();
         *self.liked_cache.lock().unwrap() = None;
         *self.liked_playlist_id.lock().unwrap() = None;
         self.collection_cache.lock().unwrap().clear();
@@ -859,6 +1053,7 @@ impl NetEaseClient {
         *self.profile.lock().unwrap() = Some(profile);
         *self.profile_checked_at.lock().unwrap() = Some(Instant::now());
         self.stream_cache.lock().unwrap().clear();
+        self.track_cache.lock().unwrap().clear();
         *self.liked_cache.lock().unwrap() = None;
         *self.liked_playlist_id.lock().unwrap() = None;
         self.collection_cache.lock().unwrap().clear();
@@ -982,7 +1177,7 @@ impl NetEaseClient {
         let mut songs_by_id: HashMap<String, Value> = HashMap::with_capacity(unique_nums.len());
         let mut privs_by_id: HashMap<String, (i64, i64)> = HashMap::with_capacity(unique_nums.len());
         for res in batch_results {
-            let res = res?;
+            let mut res = res?;
             if let Some(privs) = res.get("privileges").and_then(Value::as_array) {
                 for p in privs {
                     if let Some(id) = p.get("id").and_then(value_id_str) {
@@ -992,16 +1187,18 @@ impl NetEaseClient {
                     }
                 }
             }
-            if let Some(songs) = res.get("songs").and_then(Value::as_array) {
+            if let Some(Value::Array(songs)) = res.as_object_mut().and_then(|obj| obj.remove("songs")) {
                 for s in songs {
                     if let Some(id) = s.get("id").and_then(value_id_str) {
-                        songs_by_id.insert(id, s.clone());
+                        songs_by_id.insert(id, s);
                     }
                 }
             }
         }
 
-        Ok(build_tracks_from_details(ids, &songs_by_id, &privs_by_id, originals))
+        let tracks = build_tracks_from_details(ids, &songs_by_id, &privs_by_id, originals);
+        self.cache_tracks(&tracks);
+        Ok(tracks)
     }
 
     /// The home page content (recommended playlists and charts).
@@ -1537,22 +1734,118 @@ impl NetEaseClient {
         lock.as_ref().is_some_and(|c| c.uid == profile.id && c.id_set.contains(raw_id))
     }
 
+    /// Non-blocking cache lookup for whether `id_or_uri` is liked; returns `(liked, needs_refresh)`.
+    pub fn cached_track_liked(&self, id_or_uri: &str) -> (bool, bool) {
+        if !self.is_signed_in() {
+            return (false, false);
+        }
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        if raw_id.is_empty() {
+            return (false, false);
+        }
+        let lock = self.liked_cache.lock().unwrap();
+        match lock.as_ref() {
+            Some(c) => (c.id_set.contains(raw_id), c.at.elapsed() >= LIKED_TTL),
+            None => (false, true),
+        }
+    }
+
+    /// Triggers a deduplicated background refresh of the user's liked track IDs.
+    pub fn try_start_liked_refresh(self: &Arc<Self>, on_done: impl FnOnce() + Send + 'static) {
+        if !self.is_signed_in() {
+            return;
+        }
+        if self.liked_refreshing.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let client = Arc::clone(self);
+        if std::thread::Builder::new()
+            .name("netease-liked-refresh".into())
+            .spawn(move || {
+                struct Reset<'a>(&'a AtomicBool);
+                impl Drop for Reset<'_> {
+                    fn drop(&mut self) {
+                        self.0.store(false, Ordering::Release);
+                    }
+                }
+                let _reset = Reset(&client.liked_refreshing);
+                let uid = {
+                    let cached_uid = client.profile.lock().unwrap().as_ref().map(|p| p.id.clone());
+                    match cached_uid {
+                        Some(id) => Some(id),
+                        None => client.require_profile().ok().map(|p| p.id),
+                    }
+                };
+                if let Some(uid) = uid {
+                    if client.liked_ids_for(&uid).is_ok() {
+                        on_done();
+                    }
+                }
+            })
+            .is_err()
+        {
+            self.liked_refreshing.store(false, Ordering::Release);
+        }
+    }
+
+    fn cache_tracks(&self, tracks: &[Track]) {
+        if tracks.is_empty() {
+            return;
+        }
+        let mut cache = self.track_cache.lock().unwrap();
+        if cache.len() + tracks.len() > TRACK_CACHE_MAX {
+            cache.retain(|_, (_, at)| at.elapsed() < COLLECTION_PLAYBACK_TTL);
+            if cache.len() + tracks.len() > TRACK_CACHE_MAX {
+                cache.clear();
+            }
+        }
+        let now = Instant::now();
+        for track in tracks {
+            if !track.uri.is_empty() && !track.name.is_empty() && track.name != "歌曲暂不可用" {
+                cache.insert(track.uri.clone(), (track.clone(), now));
+            }
+        }
+    }
+
+    /// Returns a recently fetched `Track` by URI without performing network requests.
+    pub fn cached_track(&self, id_or_uri: &str) -> Option<Track> {
+        let uri = if id_or_uri.starts_with("netease:track:") {
+            id_or_uri.to_string()
+        } else {
+            format!("netease:track:{id_or_uri}")
+        };
+        let mut cache = self.track_cache.lock().unwrap();
+        if let Some((track, at)) = cache.get(&uri) {
+            if at.elapsed() < COLLECTION_PLAYBACK_TTL {
+                return Some(track.clone());
+            }
+            cache.remove(&uri);
+        }
+        None
+    }
+
     fn cache_collection(&self, collection: &Collection) {
         let mut cache = self.collection_cache.lock().unwrap();
         cache.retain(|_, (_, at)| at.elapsed() < COLLECTION_PLAYBACK_TTL);
         cache.insert(collection.header.uri.clone(), (collection.clone(), Instant::now()));
     }
 
+    /// Returns cached tracks for `uri` if still fresh, without hitting the network.
+    pub fn cached_collection_tracks(&self, uri: &str) -> Option<Vec<Track>> {
+        let lock = self.collection_cache.lock().unwrap();
+        if let Some((col, at)) = lock.get(uri) {
+            if at.elapsed() < COLLECTION_PLAYBACK_TTL {
+                return Some(col.tracks.clone());
+            }
+        }
+        None
+    }
+
     /// Returns tracks for `uri` when starting playback, reusing a recent
     /// collection fetch if still fresh to avoid re-fetching large lists.
     pub fn collection_tracks_for_playback(&self, uri: &str) -> Result<Vec<Track>, EngineError> {
-        {
-            let lock = self.collection_cache.lock().unwrap();
-            if let Some((col, at)) = lock.get(uri) {
-                if at.elapsed() < COLLECTION_PLAYBACK_TTL {
-                    return Ok(col.tracks.clone());
-                }
-            }
+        if let Some(tracks) = self.cached_collection_tracks(uri) {
+            return Ok(tracks);
         }
         let col = if uri == "netease:collection:tracks" {
             self.liked_songs()?
@@ -2086,6 +2379,24 @@ fn parse_lyrics(lrc: &str) -> Lyrics {
     }
 }
 
+fn audio_hint_from_url_or_mime(url: &str, mime_type: Option<&str>) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    if let Some(ext) = path.rsplit('.').next() {
+        let ext = ext.to_ascii_lowercase();
+        if matches!(ext.as_str(), "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav") {
+            return Some(ext);
+        }
+    }
+    match mime_type? {
+        "audio/mpeg" | "audio/mp3" => Some("mp3".to_string()),
+        "audio/flac" | "audio/x-flac" => Some("flac".to_string()),
+        "audio/mp4" | "audio/x-m4a" | "audio/aac" => Some("m4a".to_string()),
+        "audio/ogg" | "application/ogg" => Some("ogg".to_string()),
+        "audio/wav" | "audio/x-wav" | "audio/wave" => Some("wav".to_string()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StreamLookup {
     /// A playable full-track stream URL.
@@ -2178,8 +2489,33 @@ impl NetEaseClient {
         parse_player_url_response(&res, id_num)
     }
 
+    fn quality_tiers(quality: AudioQuality) -> &'static [(&'static str, &'static str)] {
+        match quality {
+            AudioQuality::Standard => &[("standard", "mp3")],
+            AudioQuality::Exhigh => &[("exhigh", "mp3"), ("standard", "mp3")],
+            AudioQuality::Lossless => &[("lossless", "flac"), ("exhigh", "mp3"), ("standard", "mp3")],
+            AudioQuality::Hires => &[("hires", "flac"), ("lossless", "flac"), ("exhigh", "mp3"), ("standard", "mp3")],
+        }
+    }
+
+    /// Returns the preferred audio streaming quality.
+    pub fn quality(&self) -> AudioQuality {
+        AudioQuality::from_u8(self.quality.load(Ordering::Relaxed))
+    }
+
+    /// Sets the preferred audio streaming quality, clearing cached stream URLs when changed.
+    pub fn set_quality(&self, quality: AudioQuality) -> bool {
+        let prev = self.quality.swap(quality.to_u8(), Ordering::AcqRel);
+        if prev != quality.to_u8() {
+            self.stream_cache.lock().unwrap().clear();
+            true
+        } else {
+            false
+        }
+    }
+
     fn fetch_stream_url_once(&self, id_num: u64) -> Result<Option<String>, EngineError> {
-        let tiers: &[(&str, &str)] = &[("exhigh", "mp3"), ("standard", "mp3")];
+        let tiers = Self::quality_tiers(self.quality());
         let mut last_err: Option<EngineError> = None;
 
         for &(level, encode_type) in tiers {
@@ -2223,6 +2559,105 @@ impl NetEaseClient {
         }
     }
 
+    /// Returns whether a fresh stream URL for `id_or_uri` is already cached in memory.
+    pub fn has_fresh_stream_url(&self, id_or_uri: &str) -> bool {
+        let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
+        let Ok(id_num) = raw_id.parse::<u64>() else {
+            return false;
+        };
+        let cache = self.stream_cache.lock().unwrap();
+        cache.get(&id_num).is_some_and(|(_, at)| at.elapsed() < STREAM_TTL)
+    }
+
+    /// Opens a progressive HTTP audio stream, buffering only the initial header bytes
+    /// before returning so decoding and playback can start immediately.
+    pub fn open_audio_stream(&self, stream_url: &str, max_bytes: u64) -> Result<ProgressiveAudioStream, EngineError> {
+        let resp = self
+            .download_agent
+            .get(stream_url)
+            .header("User-Agent", UA)
+            .header("Referer", format!("{SITE}/"))
+            .call()
+            .map_err(map_ureq_error)?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(EngineError::new(
+                ErrorCode::NotFound,
+                format!("音频下载失败（HTTP {}）", status.as_u16()),
+            ));
+        }
+
+        let total_len = resp
+            .headers()
+            .get(ureq::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        if let Some(len) = total_len {
+            if len > max_bytes {
+                return Err(EngineError::new(
+                    ErrorCode::Shape,
+                    format!("音频文件过大（{len} 字节），超出限制"),
+                ));
+            }
+        }
+
+        let mime_type = resp
+            .headers()
+            .get(ureq::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(';').next())
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+
+        let hint = audio_hint_from_url_or_mime(stream_url, mime_type.as_deref());
+        let buffer = StreamBuffer::new(total_len);
+        let cancel = StreamCancelHandle { buffer: Arc::clone(&buffer) };
+        let bg_buffer = Arc::clone(&buffer);
+        let mut body_reader = resp.into_body().into_reader();
+
+        std::thread::Builder::new()
+            .name("netease-audio-dl".into())
+            .spawn(move || {
+                let mut chunk = vec![0u8; STREAM_CHUNK_BYTES];
+                let mut read_total: u64 = 0;
+                loop {
+                    if bg_buffer.is_cancelled() {
+                        break;
+                    }
+                    match body_reader.read(&mut chunk) {
+                        Ok(0) => {
+                            bg_buffer.finish_eof();
+                            break;
+                        }
+                        Ok(n) => {
+                            read_total += n as u64;
+                            if read_total > max_bytes {
+                                bg_buffer.finish_error(format!("音频文件超出大小限制（{max_bytes} 字节）"));
+                                break;
+                            }
+                            bg_buffer.push_chunk(&chunk[..n]);
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(e) => {
+                            bg_buffer.finish_error(format!("读取音频数据失败: {e}"));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|e| EngineError::new(ErrorCode::Internal, format!("无法启动音频下载线程: {e}")))?;
+
+        buffer.wait_prebuffer(STREAM_PREBUFFER_BYTES)?;
+
+        Ok(ProgressiveAudioStream {
+            reader: ProgressiveStreamReader { buffer, pos: 0 },
+            byte_len: total_len,
+            hint,
+            mime_type,
+            cancel,
+        })
+    }
+
     /// Downloads raw audio bytes from a CDN stream URL without sending account cookies.
     pub fn download_bytes(&self, stream_url: &str, max_bytes: u64) -> Result<Vec<u8>, EngineError> {
         let resp = self
@@ -2246,7 +2681,7 @@ impl NetEaseClient {
             .map_err(|e| EngineError::new(ErrorCode::Shape, format!("读取音频数据失败: {e}")))
     }
 
-    /// Fetches audio stream URL (MP3/FLAC) for a track.
+    /// Fetches audio stream URL (MP3/FLAC) for a track, deduplicating concurrent lookups.
     pub fn stream_url(&self, id_or_uri: &str) -> Result<String, EngineError> {
         let raw_id = id_or_uri.strip_prefix("netease:track:").unwrap_or(id_or_uri);
         let id_num = raw_id.parse::<u64>().map_err(|_| {
@@ -2264,7 +2699,65 @@ impl NetEaseClient {
             cache.retain(|_, (_, at)| at.elapsed() < STREAM_TTL);
         }
 
-        // 2. Fetch with automatic 460 retry
+        // 2. Join any in-flight lookup for the same track ID or become the leader
+        let entry: StreamInflightEntry = {
+            let mut inflight = self.stream_inflight.lock().unwrap();
+            if let Some(existing) = inflight.get(&id_num) {
+                let existing = Arc::clone(existing);
+                drop(inflight);
+                let mut res_guard = existing.0.lock().unwrap();
+                while res_guard.is_none() {
+                    res_guard = existing.1.wait(res_guard).unwrap();
+                }
+                return res_guard
+                    .as_ref()
+                    .expect("inflight result populated")
+                    .clone();
+            }
+            let new_entry = Arc::new((Mutex::new(None), Condvar::new()));
+            inflight.insert(id_num, Arc::clone(&new_entry));
+            new_entry
+        };
+
+        struct InflightGuard<'a> {
+            map: &'a Mutex<HashMap<u64, StreamInflightEntry>>,
+            id_num: u64,
+            entry: StreamInflightEntry,
+            completed: bool,
+        }
+        impl Drop for InflightGuard<'_> {
+            fn drop(&mut self) {
+                self.map.lock().unwrap().remove(&self.id_num);
+                if !self.completed {
+                    *self.entry.0.lock().unwrap() = Some(Err(EngineError::new(
+                        ErrorCode::Internal,
+                        "音频地址解析意外中断",
+                    )));
+                    self.entry.1.notify_all();
+                }
+            }
+        }
+        let mut guard = InflightGuard {
+            map: &self.stream_inflight,
+            id_num,
+            entry: Arc::clone(&entry),
+            completed: false,
+        };
+
+        let result = self.resolve_stream_url_uncached(id_num);
+        if let Ok(ref url) = result {
+            let mut cache = self.stream_cache.lock().unwrap();
+            cache.insert(id_num, (url.clone(), Instant::now()));
+        }
+
+        *entry.0.lock().unwrap() = Some(result.clone());
+        entry.1.notify_all();
+        guard.completed = true;
+        result
+    }
+
+    fn resolve_stream_url_uncached(&self, id_num: u64) -> Result<String, EngineError> {
+        // Fetch with automatic 460 retry
         let mut final_url = None;
         for attempt in 0..2 {
             match self.fetch_stream_url_once(id_num) {
@@ -2295,12 +2788,6 @@ impl NetEaseClient {
             };
             return Err(EngineError::new(ErrorCode::NotFound, reason));
         };
-
-        // Cache the resolved URL
-        {
-            let mut cache = self.stream_cache.lock().unwrap();
-            cache.insert(id_num, (url.clone(), Instant::now()));
-        }
 
         Ok(url)
     }
@@ -2427,6 +2914,34 @@ mod tests {
         // Clearing session clears the stream cache
         client.stream_cache.lock().unwrap().insert(123456, (fake_url, Instant::now()));
         client.clear_session();
+        assert!(client.stream_cache.lock().unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn quality_tiers_and_cache_invalidation() {
+        assert_eq!(NetEaseClient::quality_tiers(AudioQuality::Standard), &[("standard", "mp3")]);
+        assert_eq!(NetEaseClient::quality_tiers(AudioQuality::Exhigh), &[("exhigh", "mp3"), ("standard", "mp3")]);
+        assert_eq!(
+            NetEaseClient::quality_tiers(AudioQuality::Lossless),
+            &[("lossless", "flac"), ("exhigh", "mp3"), ("standard", "mp3")]
+        );
+        assert_eq!(
+            NetEaseClient::quality_tiers(AudioQuality::Hires),
+            &[("hires", "flac"), ("lossless", "flac"), ("exhigh", "mp3"), ("standard", "mp3")]
+        );
+
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-quality-{}", std::process::id()));
+        fs::create_dir_all(&data).unwrap();
+        let client = NetEaseClient::new(&data);
+
+        assert_eq!(client.quality(), AudioQuality::Exhigh);
+        assert!(!client.set_quality(AudioQuality::Exhigh));
+
+        client.stream_cache.lock().unwrap().insert(42, ("https://m701.music.126.net/a.mp3".into(), Instant::now()));
+        assert!(client.set_quality(AudioQuality::Lossless));
+        assert_eq!(client.quality(), AudioQuality::Lossless);
         assert!(client.stream_cache.lock().unwrap().is_empty());
 
         let _ = fs::remove_dir_all(data);
@@ -2598,5 +3113,82 @@ mod tests {
         assert!(is_own_liked_playlist(&own, "42"));
         assert!(!is_own_liked_playlist(&other, "42"));
         assert!(!is_own_liked_playlist(&normal, "42"));
+    }
+
+    #[test]
+    fn progressive_stream_reader_streams_seeks_and_cancels() {
+        let buffer = StreamBuffer::new(Some(10));
+        let mut reader = ProgressiveStreamReader {
+            buffer: Arc::clone(&buffer),
+            pos: 0,
+        };
+        let writer_buf = Arc::clone(&buffer);
+        let handle = std::thread::spawn(move || {
+            writer_buf.push_chunk(b"01234");
+            std::thread::sleep(Duration::from_millis(20));
+            writer_buf.push_chunk(b"56789");
+            writer_buf.finish_eof();
+        });
+
+        buffer.wait_prebuffer(4).unwrap();
+        let mut first = [0u8; 4];
+        assert_eq!(reader.read(&mut first).unwrap(), 4);
+        assert_eq!(&first, b"0123");
+
+        // Seek near the end using Content-Length even if the second chunk is still arriving.
+        assert_eq!(reader.seek(SeekFrom::End(-3)).unwrap(), 7);
+        let mut tail = Vec::new();
+        reader.read_to_end(&mut tail).unwrap();
+        assert_eq!(&tail, b"789");
+        handle.join().unwrap();
+
+        // Cancellation unblocks a waiting reader immediately with EOF.
+        let stalled = StreamBuffer::new(None);
+        let mut stalled_reader = ProgressiveStreamReader {
+            buffer: Arc::clone(&stalled),
+            pos: 0,
+        };
+        let cancel_handle = StreamCancelHandle { buffer: Arc::clone(&stalled) };
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            cancel_handle.cancel();
+        });
+        let mut buf = [0u8; 8];
+        assert_eq!(stalled_reader.read(&mut buf).unwrap(), 0);
+        killer.join().unwrap();
+    }
+
+    #[test]
+    fn track_and_liked_caches_resolve_without_network() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-track-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+        let client = NetEaseClient::new(&data);
+        client.save_cookie_str("MUSIC_U=fixture");
+
+        let track = Track {
+            uri: "netease:track:777".to_string(),
+            name: "Cached Song".to_string(),
+            playable: true,
+            ..Track::default()
+        };
+        client.cache_tracks(&[track.clone()]);
+        assert_eq!(client.cached_track("netease:track:777").map(|t| t.name), Some("Cached Song".to_string()));
+        assert_eq!(client.cached_track("777").map(|t| t.name), Some("Cached Song".to_string()));
+
+        // Initially liked_cache is missing -> returns (false, true) without hitting network
+        assert_eq!(client.cached_track_liked("netease:track:777"), (false, true));
+
+        let mut id_set = HashSet::new();
+        id_set.insert("777".to_string());
+        *client.liked_cache.lock().unwrap() = Some(LikedCache {
+            uid: "42".to_string(),
+            ids: vec!["777".to_string()],
+            id_set,
+            at: Instant::now(),
+        });
+        assert_eq!(client.cached_track_liked("netease:track:777"), (true, false));
+
+        let _ = fs::remove_dir_all(&data);
     }
 }

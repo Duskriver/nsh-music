@@ -351,10 +351,12 @@ export interface ListWave {
    * shown yet, then 1, and one more each time it is opened again (a root
    * chosen again: `reenter`). Going back to it doesn't enter it again. */
   entry(): number;
-  /** Asks to bring item `key` (at `index`) in; `run` gets its delay, ms,
-   * after the items asked for in the same moment are put in order. False
-   * when it already came in during this entry. */
-  request(key: string, index: number, turns: number, run: (delay: number) => void): boolean;
+  /** Asks to bring item `key` (at `index`) in; `run` gets its delay (ms) and
+   * whether it belongs to the initial page opening (`opening`), after the
+   * items asked for in the same moment are put in order. Returns `"opening"`,
+   * `"late"` (scrolled into view after opening), or `false` when it already
+   * came in during this entry. */
+  request(key: string, index: number, turns: number, run: (delay: number, opening: boolean) => void): "opening" | "late" | false;
   /** Starts a new wave for items not shown yet (a new search's results). */
   restart(): void;
   /** A wave of its own over the same entries, starting `offset` ms later (a
@@ -392,17 +394,16 @@ export function createListWave(options: { isTop: () => boolean; reenter?: () => 
   const start = () => (options.afterReveal && windowStart === made ? AFTER_REVEAL : WAVE.start);
   const make = (offset: number, restartAt: { at: number }): ListWave => {
     const seen = new Map<string, number>();
-    let pending: { index: number; turns: number; run: (delay: number) => void }[] = [];
+    let pending: { index: number; turns: number; opening: boolean; run: (delay: number, opening: boolean) => void }[] = [];
     const flush = () => {
       const batch = pending.sort((a, b) => a.index - b.index);
       pending = [];
-      const now = Date.now();
-      const opening = now - Math.max(windowStart, restartAt.at) < OPENING;
       batch.forEach((item, rank) => {
         item.run(
-          opening
+          item.opening
             ? start() + offset + waveDelay(rank, item.turns) + Math.round(scatter(item.index, 0) * WAVE_VARY.lag)
             : waveDelayBy(rank, LATE_TURNS, LATE_STEP),
+          item.opening,
         );
       });
     };
@@ -412,9 +413,10 @@ export function createListWave(options: { isTop: () => boolean; reenter?: () => 
         const entry = untracked(entries);
         if (entry === 0 || seen.get(key) === entry) return false;
         seen.set(key, entry);
+        const opening = Date.now() - Math.max(windowStart, restartAt.at) < OPENING;
         if (pending.length === 0) void Promise.resolve().then(flush);
-        pending.push({ index, turns, run });
-        return true;
+        pending.push({ index, turns, opening, run });
+        return opening ? "opening" : "late";
       },
       restart() {
         restartAt.at = Date.now();
@@ -428,14 +430,13 @@ export function createListWave(options: { isTop: () => boolean; reenter?: () => 
 }
 
 /** An item's entrance in its list's wave, in three layers on their own
- * timelines: the item (`axis`: a row slides in right to left, a card rises),
- * then its cover's flip and its words' shorter slide, each with its own lag
- * and pace (`LAYER_LAG`, `WAVE_VARY`: fixed draws per item). A row's cover
- * turns in from the right; a card's (`turns: WAVE.cards`) any of four ways.
- * Played when `key` first shows in an entry. Call it once, in the item's
- * body; bind `style` on the item, `cover` on a view around its cover and
- * `text` on a view around its words. Nothing in a terminal or without a
- * wave. */
+ * timelines during page opening: the item (`axis`: a row slides in right to
+ * left, a card rises), then its cover's flip and its words' shorter slide.
+ * Items scrolled into view later use a lighter single-layer entrance so fast
+ * scrolling stays smooth without extra 3D flip timelines. Played when `key`
+ * first shows in an entry. Call it once, in the item's body; bind `style` on
+ * the item, `cover` on a view around its cover and `text` on a view around
+ * its words. Nothing in a terminal or without a wave. */
 export function listItemEntrance(options: {
   wave: ListWave | undefined;
   key: () => string;
@@ -458,6 +459,8 @@ export function listItemEntrance(options: {
   let last = "";
   let lastEntry = -1;
   let seq = 0;
+  let itemDirty = false;
+  let layersDirty = false;
   effect(() => {
     const key = options.key();
     const entry = wave.entry();
@@ -471,8 +474,14 @@ export function listItemEntrance(options: {
       const distance = vary(WAVE_DISTANCE, WAVE_VARY.distance, scatter(index, 1));
       const textDistance = vary(TEXT_DISTANCE, WAVE_VARY.distance, scatter(index, 6));
       const turn = anyTurn ? CARD_TURNS[Math.floor(scatter(index, 7) * CARD_TURNS.length)] : ROW_TURN;
-      const shown = wave.request(key, index, options.turns, (delay) => {
+      const mode = wave.request(key, index, options.turns, (delay, opening) => {
         if (ticket !== seq) return;
+        if (!opening) {
+          // Scroll-in: single-layer fast entrance (2 channels instead of 6-7)
+          // to avoid jank while scrolling long playlists.
+          item.play(slideIn(axis, distance * 0.5, DURATION.fast), delay);
+          return;
+        }
         const pace = (salt: number) => Math.round(vary(WAVE_DURATION, WAVE_VARY.duration, scatter(index, salt)));
         const lag = (layer: { base: number; spread: number }, salt: number) =>
           layer.base + Math.round(scatter(index, salt) * layer.spread);
@@ -480,19 +489,36 @@ export function listItemEntrance(options: {
         flip.play(coverFlipSpec(turn, pace(4)), delay + lag(LAYER_LAG.cover, 3));
         words.play(slideIn(axis, textDistance, pace(8)), delay + lag(LAYER_LAG.text, 9));
       });
-      if (shown) {
+      if (mode === "opening") {
         // Hidden where each layer starts until its turn comes.
+        itemDirty = true;
+        layersDirty = true;
         item.values.opacity.set(0);
         item.values[axis].set(distance);
         words.values.opacity.set(0);
         words.values[axis].set(textDistance);
         flip.values.opacity.set(0);
         flip.values[turn.channel].set(turn.from);
+      } else if (mode === "late") {
+        itemDirty = true;
+        if (layersDirty) {
+          words.reset();
+          flip.reset();
+          layersDirty = false;
+        }
+        item.values.opacity.set(0);
+        item.values[axis].set(distance * 0.5);
       } else {
         // Shown before in this entry (a cell given it back): at rest.
-        item.reset();
-        words.reset();
-        flip.reset();
+        if (itemDirty) {
+          item.reset();
+          itemDirty = false;
+        }
+        if (layersDirty) {
+          words.reset();
+          flip.reset();
+          layersDirty = false;
+        }
       }
     });
   });

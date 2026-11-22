@@ -123,11 +123,14 @@ impl AudioMeter {
                 }
             }
         }
+        inner.borrow_mut().stop = None;
     }
 
     /// Stops analyzing samples; `run()` resolves. Disposing the meter does the same.
     pub fn stop(&self) {
-
+        let mut w = self.inner.borrow_mut();
+        w.stop.take();
+        w.listeners.clear();
     }
 }
 
@@ -147,22 +150,29 @@ fn meter_samples(tx: watch::Sender<Option<AudioFrame>>) {
         let mut samples = crate::music::netease::get_audio_tap().subscribe();
         let mut analyzer = analysis::Analyzer::new();
         let mut emitter = analysis::Emitter::new();
+        let silence_timer = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(silence_timer);
         loop {
-            let sample = tokio::select! {
+            tokio::select! {
                 _ = tx.closed() => break,
-                sample = tokio::time::timeout(Duration::from_secs(1), samples.recv()) => sample,
-            };
-            match sample {
-                Ok(Ok(sample)) => analyzer.push(&[sample], 1, |levels| {
-                    if let Some(frame) = emitter.step(levels) {
-                        tx.send_replace(Some(frame));
-                    }
-                }),
-                Ok(Err(RecvError::Lagged(_))) => continue,
-                Ok(Err(RecvError::Closed)) => break,
-                Err(_) => {
+                _ = &mut silence_timer => {
                     if let Some(frame) = emitter.silence() {
                         tx.send_replace(Some(frame));
+                    }
+                    silence_timer.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(1));
+                }
+                chunk = samples.recv() => {
+                    match chunk {
+                        Ok(chunk) => {
+                            silence_timer.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(1));
+                            analyzer.push(&chunk.0, 1, |levels| {
+                                if let Some(frame) = emitter.step(levels) {
+                                    tx.send_replace(Some(frame));
+                                }
+                            });
+                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
                     }
                 }
             }
@@ -322,6 +332,7 @@ pub mod analysis {
         /// Hann's sum, halved: a full-scale sine's bin reads 1.
         norm: f32,
         samples: Vec<f32>,
+        read_pos: usize,
         buf: Vec<Complex<f32>>,
         scratch: Vec<Complex<f32>>,
         mags: Vec<f32>,
@@ -368,6 +379,7 @@ pub mod analysis {
                 window,
                 norm,
                 samples: Vec::with_capacity(FFT_SIZE + HOP * 8),
+                read_pos: 0,
                 buf: vec![Complex::default(); FFT_SIZE],
                 scratch,
                 mags: vec![0.0; FFT_SIZE / 2 + 1],
@@ -398,16 +410,22 @@ pub mod analysis {
             for chunk in interleaved.chunks_exact(channels) {
                 let s: f32 = chunk.iter().sum::<f32>() * scale;
                 self.samples.push(if s.is_finite() { s } else { 0.0 });
-                if self.samples.len() == FFT_SIZE {
+                if self.samples.len() - self.read_pos == FFT_SIZE {
                     self.analyze();
                     step(&self.out);
-                    self.samples.drain(..HOP);
+                    self.read_pos += HOP;
+                    if self.read_pos >= HOP * 8 {
+                        let remaining = self.samples.len() - self.read_pos;
+                        self.samples.copy_within(self.read_pos.., 0);
+                        self.samples.truncate(remaining);
+                        self.read_pos = 0;
+                    }
                 }
             }
         }
 
         fn analyze(&mut self) {
-            let x = &self.samples[..FFT_SIZE];
+            let x = &self.samples[self.read_pos..self.read_pos + FFT_SIZE];
             let rms = (x.iter().map(|s| s * s).sum::<f32>() / FFT_SIZE as f32).sqrt();
             let loud = rms >= GATE;
 
@@ -656,5 +674,20 @@ mod tests {
         // Before any sound, nothing at all.
         let mut fresh = Emitter::new();
         assert!(quiet.iter().all(|l| fresh.step(l).is_none()));
+    }
+
+    #[test]
+    fn stop_triggers_stop_channel_and_meter_thread_exits() {
+        let meter = super::AudioMeter::new();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        meter.inner.borrow_mut().stop = Some(stop_tx);
+        meter.stop();
+        assert!(meter.inner.borrow().stop.is_none());
+        assert!(stop_rx.try_recv().is_err());
+
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        let handle = std::thread::spawn(move || super::meter_samples(tx));
+        drop(rx);
+        handle.join().expect("meter_samples should exit promptly when rx is dropped");
     }
 }

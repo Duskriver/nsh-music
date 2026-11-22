@@ -5,7 +5,7 @@
 // version), are written only when they change, and the least recently used
 // go once there are more than `CAPACITY`.
 
-import { type Accessor, resource, signal, Storage } from "nsh";
+import { type Accessor, batch, resource, type Signal, signal, Storage } from "nsh";
 
 /** The version of the stored entries' shape; others are dropped. */
 export const SCHEMA = 1;
@@ -24,13 +24,35 @@ interface Entry {
 
 /** Entries by storage key, least recently used first. */
 const entries = new Map<string, Entry>();
-/** Bumped on every change, so readers follow the map. */
-const version = signal(0);
+/** Per-key reactive version signals so updating one entry never wakes unrelated queries. */
+const keyVersions = new Map<string, Signal<number>>();
+/** Tracks entry count changes for `cacheSize()`. */
+const sizeVersion = signal(0);
 const hydrated = signal(false);
 let hydration: Promise<void> | null = null;
 
-function bump() {
-  version.update((v) => v + 1);
+function keySignal(k: string): Signal<number> {
+  let s = keyVersions.get(k);
+  if (!s) {
+    s = signal(0);
+    keyVersions.set(k, s);
+  }
+  return s;
+}
+
+function bumpKey(k: string) {
+  keyVersions.get(k)?.update((v) => v + 1);
+}
+
+function bumpAll(keys?: Iterable<string>) {
+  batch(() => {
+    if (keys) {
+      for (const k of keys) keyVersions.get(k)?.update((v) => v + 1);
+    } else {
+      for (const s of keyVersions.values()) s.update((v) => v + 1);
+    }
+    sizeVersion.update((v) => v + 1);
+  });
 }
 
 function accountPrefix(account: string): string {
@@ -62,29 +84,38 @@ function forget(k: string) {
   Storage.removeItem(k).catch(() => {});
 }
 
-function evict() {
+function evict(): string[] {
+  const evicted: string[] = [];
   while (entries.size > CAPACITY) {
     const oldest = entries.keys().next().value as string;
     entries.delete(oldest);
     forget(oldest);
+    evicted.push(oldest);
   }
+  return evicted;
 }
 
 /** Loads the stored entries once (later calls wait for the same load), and
  * drops entries of other schema versions. Queries wait for it: they read
- * nothing until it ends. */
+ * nothing until it ends. Reads keys in parallel to minimize startup latency. */
 export function hydrate(): Promise<void> {
   hydration ??= (async () => {
     try {
       const keys = await Storage.keys();
-      const loaded: [string, Entry][] = [];
+      const validKeys: string[] = [];
       for (const k of keys) {
         if (!k.startsWith(ROOT)) continue;
         if (!k.startsWith(PREFIX)) {
           forget(k);
           continue;
         }
-        const raw = await Storage.getItem(k);
+        validKeys.push(k);
+      }
+      const rawPairs = await Promise.all(
+        validKeys.map(async (k) => [k, await Storage.getItem(k)] as const),
+      );
+      const loaded: [string, Entry][] = [];
+      for (const [k, raw] of rawPairs) {
         try {
           const parsed = raw ? (JSON.parse(raw) as { savedAt?: unknown; v?: unknown }) : null;
           if (!parsed || typeof parsed.savedAt !== "number" || parsed.v === undefined) throw new Error("bad entry");
@@ -118,8 +149,11 @@ export function hydrate(): Promise<void> {
     } catch (error) {
       console.warn("nsh-music: the cache could not load:", String(error));
     }
-    hydrated.set(true);
-    bump();
+    batch(() => {
+      hydrated.set(true);
+      for (const s of keyVersions.values()) s.update((v) => v + 1);
+      sizeVersion.update((v) => v + 1);
+    });
   })();
   return hydration;
 }
@@ -129,8 +163,9 @@ export const cacheReady: Accessor<boolean> = () => hydrated();
 
 /** The cached value of `key` for `account` (tracked where it is read). */
 export function readCache<T>(account: string, key: string): T | undefined {
-  version();
-  return entries.get(storageKey(account, key))?.v as T | undefined;
+  const k = storageKey(account, key);
+  keySignal(k)();
+  return entries.get(k)?.v as T | undefined;
 }
 
 /** Caches `value` for `key` of `account`: the most recently used entry. It
@@ -147,17 +182,28 @@ export function writeCache(account: string, key: string, value: unknown): void {
   const entry = { savedAt: Date.now(), v: value, json };
   entries.set(k, entry);
   persist(k, entry);
-  evict();
-  bump();
+  const evicted = evict();
+  batch(() => {
+    bumpKey(k);
+    for (const old of evicted) bumpKey(old);
+    if (!existing || evicted.length > 0) sizeVersion.update((v) => v + 1);
+  });
 }
 
 /** Forgets everything cached for `account`, in memory and in Storage. */
 export async function clearAccount(account: string): Promise<void> {
   const prefix = accountPrefix(account);
-  for (const k of [...entries.keys()]) if (k.startsWith(prefix)) entries.delete(k);
-  bump();
+  const removed: string[] = [];
+  for (const k of [...entries.keys()]) {
+    if (k.startsWith(prefix)) {
+      entries.delete(k);
+      removed.push(k);
+    }
+  }
+  if (removed.length > 0) bumpAll(removed);
   try {
-    for (const k of await Storage.keys()) if (k.startsWith(prefix)) await Storage.removeItem(k);
+    const keys = await Storage.keys();
+    await Promise.all(keys.filter((k) => k.startsWith(prefix)).map((k) => Storage.removeItem(k)));
   } catch (error) {
     console.warn("nsh-music: the cache could not clear an account:", String(error));
   }
@@ -166,12 +212,12 @@ export async function clearAccount(account: string): Promise<void> {
 /** Forgets every entry in memory (Storage keeps them); for tests. */
 export function clearMemory(): void {
   entries.clear();
-  bump();
+  bumpAll();
 }
 
 /** The number of entries in memory (tracked where it is read). */
 export function cacheSize(): number {
-  version();
+  sizeVersion();
   return entries.size;
 }
 

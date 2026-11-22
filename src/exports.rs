@@ -8,12 +8,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use nsh_core::{element::CallbackArgs, prelude::*};
-use serde::de::DeserializeOwned;
-use serde_json::Value;
 
 use crate::music::{
-    Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, Player, Repeat, SearchResults, Session, Snapshot,
-    command::{self, Command},
+    AudioQuality, Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, Player, Repeat, SearchResults, Session, Snapshot,
+    command::{Command, CommandOutput},
     engine,
 };
 
@@ -158,53 +156,63 @@ impl MusicEngine {
 
     /// The home page.
     pub async fn home(this: Instance<Self>) -> Result<Home, String> {
-        data(this, Command::Home).await
+        let cmd = Command::Home;
+        ask(this, cmd.clone()).await?.into_home(&cmd).map_err(String::from)
     }
 
     /// What a search for `query` finds.
     pub async fn search(this: Instance<Self>, query: String) -> Result<SearchResults, String> {
-        data(this, Command::Search(query)).await
+        let cmd = Command::Search(query);
+        ask(this, cmd.clone()).await?.into_search(&cmd).map_err(String::from)
     }
 
     /// A playlist by URI.
     pub async fn playlist(this: Instance<Self>, uri: String) -> Result<Collection, String> {
-        data(this, Command::Playlist(uri)).await
+        let cmd = Command::Playlist(uri);
+        ask(this, cmd.clone()).await?.into_collection(&cmd).map_err(String::from)
     }
 
     /// An album by URI.
     pub async fn album(this: Instance<Self>, uri: String) -> Result<Collection, String> {
-        data(this, Command::Album(uri)).await
+        let cmd = Command::Album(uri);
+        ask(this, cmd.clone()).await?.into_collection(&cmd).map_err(String::from)
     }
 
     /// An artist by URI: popular tracks, and releases.
     pub async fn artist(this: Instance<Self>, uri: String) -> Result<Collection, String> {
-        data(this, Command::Artist(uri)).await
+        let cmd = Command::Artist(uri);
+        ask(this, cmd.clone()).await?.into_collection(&cmd).map_err(String::from)
     }
 
     /// The signed-in user's Liked Songs.
     pub async fn liked_songs(this: Instance<Self>) -> Result<Collection, String> {
-        data(this, Command::LikedSongs).await
+        let cmd = Command::LikedSongs;
+        ask(this, cmd.clone()).await?.into_collection(&cmd).map_err(String::from)
     }
 
     /// The signed-in user's library.
     pub async fn library(this: Instance<Self>) -> Result<Library, String> {
-        data(this, Command::Library).await
+        let cmd = Command::Library;
+        ask(this, cmd.clone()).await?.into_library(&cmd).map_err(String::from)
     }
 
     /// The signed-in user (`id` keys per-account data).
     pub async fn me(this: Instance<Self>) -> Result<Me, String> {
-        data(this, Command::Me).await
+        let cmd = Command::Me;
+        ask(this, cmd.clone()).await?.into_me(&cmd).map_err(String::from)
     }
 
     /// A cover image's extracted color (`hex` empty when unknown), for the
     /// cover-tinted backdrops.
     pub async fn colors(this: Instance<Self>, image_url: String) -> Result<CoverColor, String> {
-        data(this, Command::Colors(image_url)).await
+        let cmd = Command::Colors(image_url);
+        ask(this, cmd.clone()).await?.into_colors(&cmd).map_err(String::from)
     }
 
     /// A track's lyrics by URI (no lines when lyrics are unavailable).
     pub async fn lyrics(this: Instance<Self>, track_uri: String) -> Result<Lyrics, String> {
-        data(this, Command::Lyrics(track_uri)).await
+        let cmd = Command::Lyrics(track_uri);
+        ask(this, cmd.clone()).await?.into_lyrics(&cmd).map_err(String::from)
     }
 
     // --- Controls --------------------------------------------------------------
@@ -255,6 +263,11 @@ impl MusicEngine {
         control(this, Command::SetRepeat(mode)).await
     }
 
+    /// Sets the preferred audio streaming quality.
+    pub async fn set_quality(this: Instance<Self>, quality: AudioQuality) -> Result<(), String> {
+        control(this, Command::SetQuality(quality)).await
+    }
+
     /// Saves the track to Liked Songs, or removes it.
     pub async fn set_liked(this: Instance<Self>, on: bool) -> Result<(), String> {
         control(this, Command::SetLiked(on)).await
@@ -299,19 +312,13 @@ impl MusicEngine {
     }
 }
 
-/// Runs `command` and returns its JSON response.
-async fn ask(this: Instance<MusicEngine>, command: Command) -> Result<Value, EngineError> {
+/// Runs `command` and returns its typed output.
+async fn ask(this: Instance<MusicEngine>, command: Command) -> Result<CommandOutput, EngineError> {
     let session = this.with(|s| s.session.clone());
     session
         .command(command)
         .await
         .unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "the engine dropped the call")))
-}
-
-/// A data command, decoded into its type.
-async fn data<T: DeserializeOwned>(this: Instance<MusicEngine>, command: Command) -> Result<T, String> {
-    let value = ask(this, command.clone()).await?;
-    command::decode(&command, value).map_err(String::from)
 }
 
 /// A control: the answer's value is ignored.

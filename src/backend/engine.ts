@@ -10,6 +10,7 @@
 import { type Accessor, signal } from "nsh";
 import { MusicEngine, type Health as NativeHealth, type Player as NativePlayer } from "nsh-music/native";
 import {
+  type AudioQuality,
   type Backend,
   backendError,
   type Collection,
@@ -70,6 +71,7 @@ function player(native: NativePlayer | null | undefined): PlayerState {
     shuffle: native.shuffle,
     shuffleAvailable: native.shuffleAvailable,
     repeat: native.repeat,
+    quality: native.quality,
     volume: native.volume,
     muted: native.muted,
     liked: native.liked,
@@ -209,6 +211,10 @@ export class EngineBackend implements Backend {
 
   setRepeat(mode: RepeatMode): Promise<void> {
     return call(() => this.#engine.setRepeat(mode));
+  }
+
+  setQuality(quality: AudioQuality): Promise<void> {
+    return call(() => this.#engine.setQuality(quality));
   }
 
   setLiked(on: boolean): Promise<void> {

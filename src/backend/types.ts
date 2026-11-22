@@ -10,6 +10,9 @@ import type { Accessor } from "nsh";
 /** How playback repeats. */
 export type RepeatMode = "off" | "context" | "track";
 
+/** Preferred audio streaming quality. */
+export type AudioQuality = "standard" | "exhigh" | "lossless" | "hires";
+
 /** Where the session is. */
 export type HealthStatus = "starting" | "ready" | "signingIn" | "failed";
 
@@ -54,6 +57,7 @@ export interface PlayerState {
   shuffle: boolean;
   shuffleAvailable: boolean;
   repeat: RepeatMode;
+  quality: AudioQuality;
   /** 0 to 1. */
   volume: number;
   muted: boolean;
@@ -77,6 +81,7 @@ export const EMPTY_PLAYER: PlayerState = {
   shuffle: false,
   shuffleAvailable: false,
   repeat: "off",
+  quality: "exhigh",
   volume: 1,
   muted: false,
   liked: false,
@@ -238,6 +243,7 @@ export interface Backend {
   setVolume(volume: number): Promise<void>;
   setShuffle(on: boolean): Promise<void>;
   setRepeat(mode: RepeatMode): Promise<void>;
+  setQuality(quality: AudioQuality): Promise<void>;
   setLiked(on: boolean): Promise<void>;
   setMuted(on: boolean): Promise<void>;
   /** Plays a collection, from `trackUri` when given. */

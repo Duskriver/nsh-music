@@ -208,6 +208,53 @@ impl Repeat {
     }
 }
 
+/// Preferred audio streaming quality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioQuality {
+    /// Standard 128 kbps MP3.
+    Standard,
+    /// High quality 320 kbps MP3.
+    #[default]
+    Exhigh,
+    /// Lossless FLAC.
+    Lossless,
+    /// Hi-Res FLAC.
+    Hires,
+}
+
+impl AudioQuality {
+    /// The NetEase API quality tier string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AudioQuality::Standard => "standard",
+            AudioQuality::Exhigh => "exhigh",
+            AudioQuality::Lossless => "lossless",
+            AudioQuality::Hires => "hires",
+        }
+    }
+
+    /// Converts from a compact numeric representation.
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => AudioQuality::Standard,
+            2 => AudioQuality::Lossless,
+            3 => AudioQuality::Hires,
+            _ => AudioQuality::Exhigh,
+        }
+    }
+
+    /// Converts to a compact numeric representation.
+    pub fn to_u8(self) -> u8 {
+        match self {
+            AudioQuality::Standard => 0,
+            AudioQuality::Exhigh => 1,
+            AudioQuality::Lossless => 2,
+            AudioQuality::Hires => 3,
+        }
+    }
+}
+
 /// The player's state (one object per change).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsObject)]
 #[serde(default, rename_all = "camelCase")]
@@ -241,6 +288,8 @@ pub struct Player {
     pub shuffle_available: bool,
     /// How it repeats.
     pub repeat: Repeat,
+    /// Preferred audio streaming quality.
+    pub quality: AudioQuality,
     /// The volume, 0 to 1.
     pub volume: f64,
     /// Whether it is muted.

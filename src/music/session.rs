@@ -2,17 +2,16 @@
 
 use std::{sync::mpsc, thread::JoinHandle, time::Duration};
 
-use serde_json::Value;
 use tokio::sync::{oneshot, watch};
 
 use super::{
-    command::Command,
+    command::{Command, CommandOutput},
     model::{EngineError, ErrorCode, Health, Player},
     paths::Paths,
 };
 
-/// What a command answers: the response as JSON, or why not.
-pub type Answer = Result<Value, EngineError>;
+/// What a command answers: a typed output, or why it failed.
+pub type Answer = Result<CommandOutput, EngineError>;
 
 /// What the session publishes; TSX's listeners hear its changes.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -40,6 +39,8 @@ pub enum Request {
     SignOut,
     /// Tries to start the player again now.
     Retry,
+    /// Internal wakeup signal for the session runner.
+    Wake,
     /// Ends the session thread; `ack` hears when it has.
     Shutdown(mpsc::Sender<()>),
 }

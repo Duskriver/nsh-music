@@ -1,6 +1,6 @@
 [package]
 name = "nsh-app-nsh-music"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 publish = false
 
@@ -46,3 +46,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Wind
 [dev-dependencies]
 nsh-engine = { git = "https://github.com/longbridge/nsh", branch = "main" }
 nsh-testing = { git = "https://github.com/longbridge/nsh", branch = "main" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

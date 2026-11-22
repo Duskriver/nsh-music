@@ -9,6 +9,7 @@ import { lyricsShown, nowPlayingOpen, setLyricsShown, setNowPlayingOpen } from "
 import { player } from "../../state/player";
 import { lightEffect } from "../../state/visual";
 import { LightMenu } from "./light-menu";
+import { QualityMenu } from "./quality-menu";
 import { LyricsView } from "./lyrics";
 import { Cover, IconButton } from "../ui/controls";
 import { AppSheet } from "../ui/overlays";
@@ -123,6 +124,7 @@ function NowPlayingContent() {
             hint
             onPress={() => setLyricsShown(!lyricsShown())}
           />
+          <QualityMenu placement="bottom" />
           <VolumeControl quiet />
           <LightMenu placement="bottom" size={22} />
         </View>

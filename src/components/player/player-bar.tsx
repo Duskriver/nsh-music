@@ -11,6 +11,7 @@ import { coverColorsQuery } from "../../data/queries";
 import { setCoverTint } from "../../state/tint";
 import { lightEffect } from "../../state/visual";
 import { LightMenu } from "./light-menu";
+import { QualityMenu } from "./quality-menu";
 import { PlayerGlass } from "../ui/toolbar-fx";
 import { Region } from "../ui/regions";
 import { barSize } from "../layout";
@@ -102,6 +103,7 @@ export function PlayerBar() {
               here, balancing what plays on the left; the light's menu at the
               very end. */}
           <IconButton name="microphone" label="Lyrics" hint disabled={!hasTrack()} onPress={openLyrics} />
+          <QualityMenu placement="top" />
           <VolumeControl quiet />
           <LightMenu placement="top" />
         </View>
@@ -150,6 +152,7 @@ export function TerminalPlayer() {
         <View class="flex-1">
           <SeekBar inline />
         </View>
+        <QualityMenu placement="top" />
         <VolumeControl />
       </View>
     </View>

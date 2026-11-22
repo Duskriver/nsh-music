@@ -7,8 +7,8 @@
 // heartbeat) don't wipe it, so nothing flickers back. A control that fails
 // drops its change, so nothing stays on screen that did not happen.
 
-import { Animated, cleanup, type CompositeAnimation, computed, createAnimatedValue, Easing, effect, signal, untracked } from "nsh";
-import { EMPTY_PLAYER, type Item, type PlayerState, positionAt, type RepeatMode, type Track } from "../backend/types";
+import { Animated, cleanup, type CompositeAnimation, computed, createAnimatedValue, Easing, effect, signal, Storage, untracked } from "nsh";
+import { type AudioQuality, EMPTY_PLAYER, type Item, type PlayerState, positionAt, type RepeatMode, type Track } from "../backend/types";
 import { invalidateLikedSongs } from "../data/queries";
 import { backend } from "./engine";
 import { type MessageId, notify, report } from "./feedback";
@@ -319,6 +319,47 @@ const NEXT_REPEAT: Record<RepeatMode, RepeatMode> = { off: "context", context: "
 export function cycleRepeat(): void {
   const repeat = NEXT_REPEAT[player().repeat];
   send({ repeat }, () => backend.setRepeat(repeat));
+}
+
+const QUALITY_KEY = "player:quality";
+const VALID_QUALITIES: AudioQuality[] = ["standard", "exhigh", "lossless", "hires"];
+const savedQuality = signal<AudioQuality | null>(null);
+
+Storage.getItem(QUALITY_KEY)
+  .then((saved) => {
+    if (saved && (VALID_QUALITIES as string[]).includes(saved)) {
+      savedQuality.set(saved as AudioQuality);
+    }
+  })
+  .catch(() => {});
+
+let appliedSavedQuality = false;
+effect(() => {
+  const saved = savedQuality();
+  if (!ready() || !saved || appliedSavedQuality) return;
+  appliedSavedQuality = true;
+  if (untracked(() => backend.player().quality) !== saved) {
+    backend.setQuality(saved).catch(() => {});
+  }
+});
+
+/** Switches the preferred audio streaming quality and remembers it. */
+export function setQuality(quality: AudioQuality): void {
+  if (!ready()) return;
+  const entry: Pending = { change: { quality }, started: Date.now(), settled: null };
+  pending.update((list) => [...list, entry]);
+  Storage.setItem(QUALITY_KEY, quality).catch(() => {});
+  backend.setQuality(quality).then(
+    () => {
+      entry.settled = Date.now();
+      setTimeout(prune, SETTLE_GRACE + 50);
+      prune();
+    },
+    (error) => {
+      pending.update((list) => list.filter((p) => p !== entry));
+      report("playFailed", error);
+    },
+  );
 }
 
 export function toggleLike(): void {

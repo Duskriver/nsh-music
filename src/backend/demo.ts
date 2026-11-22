@@ -6,6 +6,7 @@
 import { type Accessor, signal } from "nsh";
 import * as fixtures from "./fixtures";
 import {
+  type AudioQuality,
   type Backend,
   backendError,
   type Collection,
@@ -191,6 +192,11 @@ export class DemoBackend implements Backend {
   async setRepeat(mode: RepeatMode): Promise<void> {
     this.#ready();
     this.#update({ repeat: mode });
+  }
+
+  async setQuality(quality: AudioQuality): Promise<void> {
+    this.#ready();
+    this.#update({ quality });
   }
 
   async setLiked(on: boolean): Promise<void> {

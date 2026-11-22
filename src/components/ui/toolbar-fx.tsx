@@ -369,6 +369,7 @@ fn glow(p: vec2f, uv: vec2f) -> vec4f {
     col = col + cycle(depth_x(uv.x, z) * 0.75 + z * 0.1) * w;
     sum = sum + w;
     seen = seen * (1.0 - 0.85 * clamp((p.y - rd.y) * nsh.scale + 0.5, 0.0, 1.0));
+    if (seen < 0.02) { break; }
   }
   return vec4f(col / max(sum, 0.001), sum * ends(uv));
 }
@@ -436,22 +437,14 @@ fn glow(p: vec2f, uv: vec2f) -> vec4f {
 // the poles, the treble at the equator) and swelling on the beat. Dots in
 // front are larger and brighter than those seen through it behind.
 const ORB = /* wgsl */ `
-fn orb_turn(v: vec3f, a: f32, b: f32) -> vec3f {
+fn orb_turn_cs(v: vec3f, ca: f32, sa: f32, cb: f32, sb: f32) -> vec3f {
   // Turn about y by a, then tilt about x by b.
-  let ca = cos(a);
-  let sa = sin(a);
   let r1 = vec3f(ca * v.x + sa * v.z, v.y, -sa * v.x + ca * v.z);
-  let cb = cos(b);
-  let sb = sin(b);
   return vec3f(r1.x, cb * r1.y - sb * r1.z, sb * r1.y + cb * r1.z);
 }
 
-fn orb_back(v: vec3f, a: f32, b: f32) -> vec3f {
-  let cb = cos(b);
-  let sb = sin(b);
+fn orb_back_cs(v: vec3f, ca: f32, sa: f32, cb: f32, sb: f32) -> vec3f {
   let r1 = vec3f(v.x, cb * v.y + sb * v.z, -sb * v.y + cb * v.z);
-  let ca = cos(a);
-  let sa = sin(a);
   return vec3f(ca * r1.x - sa * r1.z, r1.y, sa * r1.x + ca * r1.z);
 }
 
@@ -459,48 +452,62 @@ fn glow(p: vec2f, uv: vec2f) -> vec4f {
   let t = uniforms.clock;
   let c = vec2f(nsh.size.x * 0.5, nsh.size.y * 0.5);
   let r0 = min(nsh.size.y * 0.36, nsh.size.x * 0.3);
-  let turn = t * 0.35;
-  let tilt = 0.35 + 0.1 * sin(t * 0.2);
-  let rows = 26.0;
-  let pi = 3.14159265;
-  // Where on the sphere this point looks (the average radius), front and back.
   let q0 = (p - c) / (r0 * 1.12);
   let len = length(q0);
+  // A faint halo around it; pixels far outside the orb skip the 3D dot loop.
+  let halo = 0.06 * exp(-max(len - 1.0, 0.0) * 3.0) * (0.5 + 0.5 * uniforms.level);
+  if (len > 1.55) {
+    return vec4f(cycle(0.0), halo);
+  }
+  let turn = t * 0.35;
+  let tilt = 0.35 + 0.1 * sin(t * 0.2);
+  let ca = cos(turn);
+  let sa = sin(turn);
+  let cb = cos(tilt);
+  let sb = sin(tilt);
+  let rows = 26.0;
+  let pi = 3.14159265;
+  let inv_2pi = 0.15915494;
+  let level_scale = 0.5 + 0.5 * uniforms.level;
+  let beat_boost = 0.06 * uniforms.beat;
+  let size_scale = max(r0 / 90.0, 0.6);
+  // Where on the sphere this point looks (the average radius), front and back.
   let q = q0 / max(len, 1.0);
   let zf = sqrt(max(1.0 - dot(q, q), 0.0));
   var col = vec3f(0.0);
   var sum = 0.0;
   for (var side = 0; side < 2; side = side + 1) {
     let z = select(-zf, zf, side == 0);
-    let dir = orb_back(vec3f(q.x, -q.y, z), turn, tilt);
+    let dir = orb_back_cs(vec3f(q.x, -q.y, z), ca, sa, cb, sb);
     let lat = acos(clamp(dir.y, -1.0, 1.0));
     let lon = atan2(dir.z, dir.x) + pi;
     let row = floor(lat / pi * rows);
     for (var dr = -1; dr <= 1; dr = dr + 1) {
       let i = clamp(row + f32(dr), 0.0, rows - 1.0);
-      let la = (i + 0.5) / rows * pi;
-      let n = max(1.0, floor(2.0 * rows * sin(la) + 0.5));
-      let jc = floor(lon / (2.0 * pi) * n);
+      let la_norm = (i + 0.5) / rows;
+      let la = la_norm * pi;
+      let sin_la = sin(la);
+      let cos_la = cos(la);
+      let n = max(1.0, floor(2.0 * rows * sin_la + 0.5));
+      let jc = floor(lon * inv_2pi * n);
+      let band_v = pow(spectrum(abs(la_norm - 0.5) * 2.0), 1.2);
       for (var dj = -1; dj <= 1; dj = dj + 1) {
         let j = jc + f32(dj);
         let lo = (j + 0.5) / n * 2.0 * pi - pi;
-        let unit = vec3f(sin(la) * cos(lo), cos(la), sin(la) * sin(lo));
-        let band = spectrum(abs(la / pi - 0.5) * 2.0);
-        let v = pow(band, 1.2) * (0.65 + 0.35 * sin(lo * 3.0 + t * 1.3));
-        let r = r0 * (1.0 + 0.28 * v * (0.5 + 0.5 * uniforms.level) + 0.06 * uniforms.beat);
-        let w3 = orb_turn(unit, turn, tilt) * r;
+        let unit = vec3f(sin_la * cos(lo), cos_la, sin_la * sin(lo));
+        let v = band_v * (0.65 + 0.35 * sin(lo * 3.0 + t * 1.3));
+        let r = r0 * (1.0 + 0.28 * v * level_scale + beat_boost);
+        let w3 = orb_turn_cs(unit, ca, sa, cb, sb) * r;
         let at = c + vec2f(w3.x, -w3.y);
         let near = clamp(w3.z / r * 0.5 + 0.5, 0.0, 1.0);
-        let size = (0.45 + 0.75 * near) * (0.8 + 0.6 * v) * max(r0 / 90.0, 0.6);
+        let size = (0.45 + 0.75 * near) * (0.8 + 0.6 * v) * size_scale;
         let d = length(p - at);
         let dot = exp(-pow(d / size, 2.0)) * (0.2 + 0.8 * near) * (0.5 + 0.5 * v);
-        col = col + cycle(la / pi * 0.5 + (j / n) * 0.5) * dot;
+        col = col + cycle(la_norm * 0.5 + (j / n) * 0.5) * dot;
         sum = sum + dot;
       }
     }
   }
-  // A faint halo around it.
-  let halo = 0.06 * exp(-max(len - 1.0, 0.0) * 3.0) * (0.5 + 0.5 * uniforms.level);
   return vec4f((col + cycle(0.0) * halo) / max(sum + halo, 0.001), sum + halo);
 }
 `;
@@ -688,6 +695,7 @@ const LIGHT_TAIL = /* wgsl */ `
 fn shade(uv: vec2f) -> vec4f {
   let p = uv * nsh.size;
   let inside = clamp(-0.5 - pill(p) * nsh.scale, 0.0, 1.0);
+  if (inside <= 0.001) { return vec4f(0.0); }
   let g = glow(p, uv);
   let light = clamp(g.a, 0.0, 1.0) * uniforms.strength * inside;
   let noise = (fract(52.9829189 * fract(dot(p * nsh.scale, vec2f(0.06711056, 0.00583715)))) - 0.5) / 255.0;
@@ -702,6 +710,7 @@ const WHITE_TAIL = /* wgsl */ `
 fn shade(uv: vec2f) -> vec4f {
   let p = uv * nsh.size;
   let inside = clamp(-0.5 - pill(p) * nsh.scale, 0.0, 1.0);
+  if (inside <= 0.001) { return vec4f(0.0); }
   let g = glow(p, uv);
   let chroma = max(max(g.r, g.g), g.b) - min(min(g.r, g.g), g.b);
   // The coloured light (thin, small, brief) keeps the cover's hue vivid.
@@ -812,12 +821,14 @@ function lightUniforms(props: { effect: ToolbarEffect; colors: string[]; playing
     live.set(BASS, metered ? a.bass : 0.3);
     live.set(MID, metered ? a.mid : 0.3);
     live.set(TREBLE, metered ? a.treble : 0.3);
-    const now = Date.now() / 1000;
-    const pulse = metered ? a.beat : 0;
-    if (pulse > lastPulse + 0.5) lastBeat = now;
-    lastPulse = pulse;
-    live.set(SINCE, Math.min(2, now - lastBeat));
-    live.set(ONSET, lastBeat % 600);
+    if (props.effect === "current") {
+      const now = Date.now() / 1000;
+      const pulse = metered ? a.beat : 0;
+      if (pulse > lastPulse + 0.5) lastBeat = now;
+      lastPulse = pulse;
+      live.set(SINCE, Math.min(2, now - lastBeat));
+      live.set(ONSET, lastBeat % 600);
+    }
   });
   // Time moves the light while it plays, metered or not (where nothing
   // meters the music, as on macOS, no levels come at all): two native

@@ -5,6 +5,7 @@
 
 import { computed, effect, reduceMotion, Shader, Text, token, View } from "nsh";
 import { audioLevels, liveValues } from "../../platform/audio";
+import { nowPlayingOpen } from "../../state/overlays";
 import { terminal } from "./controls";
 
 const SOURCE = /* wgsl */ `
@@ -62,15 +63,17 @@ export function PlayingBars(props: { playing: boolean; size?: number }) {
   const height = () => props.size ?? 14;
   if (terminal) return <Text class="text-foreground">♪</Text>;
   const audio = audioLevels();
-  // Changes only when the music starts or stops being metered; paused, the
-  // music's frames are not followed.
-  const live = computed(() => (props.playing && audio().level > 0.02 ? 1 : 0));
+  // Active only while playing and not covered by the full-screen Now Playing sheet.
+  const active = () => props.playing && !nowPlayingOpen();
+  // Changes only when the music starts or stops being metered; paused or
+  // occluded, the music's frames are not followed.
+  const live = computed(() => (active() && audio().level > 0.02 ? 1 : 0));
   // The levels reach the shader as animated values: its layer is not sent
   // anew with each of the music's frames.
   const levels = liveValues(3);
   effect(() => {
-    // Paused: at rest, and the music's frames not followed (not read).
-    if (!props.playing) {
+    // Paused or occluded: at rest, and the music's frames not followed (not read).
+    if (!active()) {
       levels.set(0, 0);
       levels.set(1, 0);
       levels.set(2, 0);
@@ -89,13 +92,13 @@ export function PlayingBars(props: { playing: boolean; size?: number }) {
         // Its own rhythm reads the clock, which redraws every display frame:
         // only while nothing is metered. Metered, it draws as the levels
         // change.
-        paused={!props.playing || reduceMotion() || live() === 1}
+        paused={!active() || reduceMotion() || live() === 1}
         class="absolute inset-0"
         uniforms={{
           color: String(token("foreground")),
           levels: [levels.values[0], levels.values[1], levels.values[2], 0],
-          live: props.playing ? live() : 0,
-          playing: props.playing && !reduceMotion() ? 1 : 0,
+          live: active() ? live() : 0,
+          playing: active() && !reduceMotion() ? 1 : 0,
           pad0: 0,
           pad1: 0,
         }}
