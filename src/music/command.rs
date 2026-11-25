@@ -1,7 +1,7 @@
 //! Commands shared by the native session and the offline demo.
 
 use super::model::{
-    AudioQuality, Collection, CoverColor, EngineError, ErrorCode, Home, Library, Lyrics, Me, Repeat, SearchResults,
+    AudioQuality, Collection, CoverColor, EngineError, ErrorCode, Home, Library, Lyrics, Me, PlayMode, SearchResults,
 };
 
 /// Typed result of an engine command, transferred directly without JSON round-trips.
@@ -110,8 +110,7 @@ pub enum Command {
     Seek(f64),
     /// To this volume, 0 to 1.
     SetVolume(f64),
-    SetShuffle(bool),
-    SetRepeat(Repeat),
+    SetPlayMode(PlayMode),
     SetQuality(AudioQuality),
     SetLiked(bool),
     SetMuted(bool),
@@ -146,8 +145,7 @@ impl Command {
             Command::Previous => "previous",
             Command::Seek(_) => "seek",
             Command::SetVolume(_) => "setVolume",
-            Command::SetShuffle(_) => "setShuffle",
-            Command::SetRepeat(_) => "setRepeat",
+            Command::SetPlayMode(_) => "setPlayMode",
             Command::SetQuality(_) => "setQuality",
             Command::SetLiked(_) => "setLiked",
             Command::SetMuted(_) => "setMuted",

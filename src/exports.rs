@@ -10,7 +10,7 @@ use std::{cell::RefCell, rc::Rc};
 use nsh_core::{element::CallbackArgs, prelude::*};
 
 use crate::music::{
-    AudioQuality, Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, Player, Repeat, SearchResults, Session, Snapshot,
+    AudioQuality, Collection, CoverColor, EngineError, ErrorCode, Health, Home, Library, Lyrics, Me, PlayMode, Player, SearchResults, Session, Snapshot,
     command::{Command, CommandOutput},
     engine,
 };
@@ -253,14 +253,9 @@ impl MusicEngine {
         control(this, Command::SetVolume(volume)).await
     }
 
-    /// Turns shuffle on or off.
-    pub async fn set_shuffle(this: Instance<Self>, on: bool) -> Result<(), String> {
-        control(this, Command::SetShuffle(on)).await
-    }
-
-    /// Sets how it repeats.
-    pub async fn set_repeat(this: Instance<Self>, mode: Repeat) -> Result<(), String> {
-        control(this, Command::SetRepeat(mode)).await
+    /// Sets the playback mode.
+    pub async fn set_play_mode(this: Instance<Self>, mode: PlayMode) -> Result<(), String> {
+        control(this, Command::SetPlayMode(mode)).await
     }
 
     /// Sets the preferred audio streaming quality.

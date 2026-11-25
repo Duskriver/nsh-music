@@ -678,20 +678,11 @@ impl NetEaseRunner {
                 let _ = reply.send(res);
                 self.publish();
             }
-            Command::SetShuffle(on) => {
+            Command::SetPlayMode(mode) => {
                 let res = self
                     .player
                     .as_mut()
-                    .map_or(Ok(()), |p| p.set_shuffle(on))
-                    .map(|()| CommandOutput::Unit);
-                let _ = reply.send(res);
-                self.publish();
-            }
-            Command::SetRepeat(mode) => {
-                let res = self
-                    .player
-                    .as_mut()
-                    .map_or(Ok(()), |p| p.set_repeat(mode))
+                    .map_or(Ok(()), |p| p.set_play_mode(mode))
                     .map(|()| CommandOutput::Unit);
                 let _ = reply.send(res);
                 self.publish();

@@ -17,7 +17,7 @@ import {
   type Lyrics,
   type Me,
   type PlayerState,
-  type RepeatMode,
+  type PlayMode,
   type SearchResults,
   type Track,
 } from "./types";
@@ -53,6 +53,7 @@ export class DemoBackend implements Backend {
   #account = 0;
   #queue: Track[] = [];
   #index = 0;
+  #shuffleHistory: number[] = [];
   #timers = new Set<ReturnType<typeof setTimeout>>();
   #ending: ReturnType<typeof setTimeout> | undefined;
 
@@ -170,7 +171,7 @@ export class DemoBackend implements Backend {
 
   async previous(): Promise<void> {
     this.#ready();
-    if (this.#position() > 3000 || this.#index === 0) this.#update({ positionMs: 0 });
+    if (this.#position() > 3000) this.#update({ positionMs: 0 });
     else this.#advance(-1);
   }
 
@@ -184,14 +185,10 @@ export class DemoBackend implements Backend {
     this.#update({ volume: Math.max(0, Math.min(1, volume)) });
   }
 
-  async setShuffle(on: boolean): Promise<void> {
+  async setPlayMode(mode: PlayMode): Promise<void> {
     this.#ready();
-    this.#update({ shuffle: on });
-  }
-
-  async setRepeat(mode: RepeatMode): Promise<void> {
-    this.#ready();
-    this.#update({ repeat: mode });
+    if (mode !== "shuffle") this.#shuffleHistory = [];
+    this.#update({ playMode: mode });
   }
 
   async setQuality(quality: AudioQuality): Promise<void> {
@@ -215,6 +212,7 @@ export class DemoBackend implements Backend {
     const found = fixtures.collection(uri);
     if (!found || found.tracks.length === 0) throw backendError("E_NOT_FOUND", `no demo collection ${uri}`);
     this.#queue = found.tracks;
+    this.#shuffleHistory = [];
     const at = trackUri ? found.tracks.findIndex((t) => t.uri === trackUri) : -1;
     this.#index = Math.max(0, at);
     this.#load(uri, {});
@@ -225,6 +223,7 @@ export class DemoBackend implements Backend {
     const track = findTrack(uri);
     if (!track) throw backendError("E_NOT_FOUND", `no demo track ${uri}`);
     this.#queue = [track];
+    this.#shuffleHistory = [];
     this.#index = 0;
     this.#load("", {});
   }
@@ -250,6 +249,7 @@ export class DemoBackend implements Backend {
     if (this.#ending) clearTimeout(this.#ending);
     this.#account = (this.#account + 1) % ACCOUNTS.length;
     this.#queue = [];
+    this.#shuffleHistory = [];
     this.#signedIn.set(false);
     this.#player.set({ ...EMPTY_PLAYER, at: Date.now() });
   }
@@ -288,14 +288,26 @@ export class DemoBackend implements Backend {
 
   #ended(): void {
     const p = this.#player();
-    if (p.repeat === "track") this.#update({ positionMs: 0 });
-    else if (this.#index + 1 < this.#queue.length || p.repeat === "context") this.#advance(1);
-    else this.#update({ playing: false, positionMs: p.durationMs });
+    if (p.playMode === "repeatOne") this.#update({ positionMs: 0 });
+    else this.#advance(1);
   }
 
   #advance(step: number): void {
-    if (this.#queue.length === 0) return;
-    this.#index = (this.#index + step + this.#queue.length) % this.#queue.length;
+    const len = this.#queue.length;
+    if (len === 0) return;
+    const mode = this.#player().playMode;
+    if (mode === "shuffle" && len > 1) {
+      if (step > 0) {
+        if (this.#shuffleHistory.length >= 64) this.#shuffleHistory.shift();
+        this.#shuffleHistory.push(this.#index);
+        this.#index = (this.#index + 1 + Math.floor(Math.random() * (len - 1))) % len;
+      } else {
+        const prev = this.#shuffleHistory.pop();
+        this.#index = prev !== undefined && prev < len && prev !== this.#index ? prev : (this.#index + step + len) % len;
+      }
+    } else {
+      this.#index = (this.#index + step + len) % len;
+    }
     this.#load(this.#player().contextUri, {});
   }
 
@@ -311,7 +323,6 @@ export class DemoBackend implements Backend {
       playing: true,
       positionMs: 0,
       durationMs: track.durationMs,
-      shuffleAvailable: true,
       liked: fixtures.collection(fixtures.LIKED_URI)?.tracks.some((t) => t.uri === track.uri) ?? false,
       canNext: this.#queue.length > 1,
       canPrevious: true,

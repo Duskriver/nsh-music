@@ -14,7 +14,7 @@ use log::warn;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source, source::SeekError};
 
 use super::client::{NetEaseClient, StreamCancelHandle};
-use crate::music::model::{AudioQuality, EngineError, ErrorCode, Player, Repeat, Track};
+use crate::music::model::{AudioQuality, EngineError, ErrorCode, PlayMode, Player, Track};
 
 /// Number of mono PCM samples per audio-tap broadcast batch (aligned with
 /// `audio::analysis::HOP` = 400 samples ≈ 8.3 ms at 48 kHz).
@@ -188,7 +188,7 @@ pub enum TickAction {
     None,
     /// Position/state changed without changing tracks.
     Changed,
-    /// Current track ended under `Repeat::Track` and should restart.
+    /// Current track ended under `PlayMode::RepeatOne` and should restart.
     ReplayCurrent,
     /// Current track ended and should advance to the next track.
     Ended,
@@ -197,7 +197,7 @@ pub enum TickAction {
 /// Decision produced when initiating a track transition.
 #[derive(Debug, Clone)]
 pub enum SwitchPlan {
-    /// Playback paused (e.g. reached the end of queue with repeat off).
+    /// Playback paused (e.g. queue is empty or no playable track was found).
     Paused,
     /// A track was selected and is ready to be loaded in background.
     Load {
@@ -289,6 +289,7 @@ pub struct PlayerManager {
     queue: Vec<Track>,
     queue_index: usize,
     next_shuffle_index: Option<usize>,
+    shuffle_history: Vec<usize>,
     current_track: Option<Track>,
     context_uri: String,
     context_href: String,
@@ -298,8 +299,7 @@ pub struct PlayerManager {
     pending_seek_ms: Option<f64>,
     volume: f64,
     muted: bool,
-    shuffle: bool,
-    repeat: Repeat,
+    play_mode: PlayMode,
     liked: bool,
     position_ms: f64,
     play_started_at: Option<Instant>,
@@ -329,6 +329,7 @@ impl PlayerManager {
             queue: Vec::new(),
             queue_index: 0,
             next_shuffle_index: None,
+            shuffle_history: Vec::new(),
             current_track: None,
             context_uri: String::new(),
             context_href: String::new(),
@@ -338,8 +339,7 @@ impl PlayerManager {
             pending_seek_ms: None,
             volume: 1.0,
             muted: false,
-            shuffle: false,
-            repeat: Repeat::Off,
+            play_mode: PlayMode::RepeatAll,
             liked: false,
             position_ms: 0.0,
             play_started_at: None,
@@ -455,8 +455,8 @@ impl PlayerManager {
                 (String::new(), String::new(), String::new(), String::new(), String::new(), 0.0)
             };
 
-        let can_next = self.queue_index + 1 < self.queue.len() || self.repeat == Repeat::Context;
-        let can_previous = self.queue_index > 0 || self.position_ms() > 3000.0;
+        let can_next = self.queue.len() > 1;
+        let can_previous = self.queue.len() > 1 || self.position_ms() > 3000.0;
 
         Player {
             title,
@@ -470,9 +470,7 @@ impl PlayerManager {
             position_ms: self.position_ms().min(duration_ms),
             duration_ms,
             at: now_millis(),
-            shuffle: self.shuffle,
-            shuffle_available: true,
-            repeat: self.repeat,
+            play_mode: self.play_mode,
             quality: self.client.quality(),
             volume: self.volume,
             muted: self.muted,
@@ -525,6 +523,7 @@ impl PlayerManager {
     pub fn start_single_track(&mut self, track: Track, context_href: String) -> SwitchPlan {
         self.context_uri.clear();
         self.next_shuffle_index = None;
+        self.shuffle_history.clear();
         self.begin_track_load(track, context_href, 0)
     }
 
@@ -579,33 +578,32 @@ impl PlayerManager {
         true
     }
 
+    fn pick_shuffle_index(&self, len: usize) -> usize {
+        if len <= 1 {
+            return 0;
+        }
+        (self.queue_index + 1 + (now_millis() as usize % (len - 1))) % len
+    }
+
     /// Computes and returns the URI of the next likely playable track for background URL prefetch.
     pub fn peek_upcoming_track_uri(&mut self) -> Option<String> {
         let len = self.queue.len();
-        if len <= 1 && self.repeat != Repeat::Context {
-            return None;
-        }
-        if len == 0 {
+        if len <= 1 {
             return None;
         }
         let has_marked_playable = self.queue.iter().any(|t| t.playable);
-        let candidate = if self.shuffle {
-            let idx = match self.next_shuffle_index {
+        let candidate = if self.play_mode == PlayMode::Shuffle {
+            match self.next_shuffle_index {
                 Some(idx) if idx < len && idx != self.queue_index => idx,
                 _ => {
-                    let picked = (self.queue_index + 1 + (now_millis() as usize % (len.max(2) - 1))) % len;
+                    let picked = self.pick_shuffle_index(len);
                     self.next_shuffle_index = Some(picked);
                     picked
                 }
-            };
-            Some(idx)
-        } else if self.queue_index + 1 < len {
-            Some(self.queue_index + 1)
-        } else if self.repeat == Repeat::Context {
-            Some(0)
+            }
         } else {
-            None
-        }?;
+            (self.queue_index + 1) % len
+        };
 
         let mut idx = candidate;
         for _ in 0..len {
@@ -616,9 +614,6 @@ impl PlayerManager {
                 return None;
             }
             idx = (idx + 1) % len;
-            if idx == 0 && self.repeat != Repeat::Context && !self.shuffle {
-                break;
-            }
         }
         None
     }
@@ -645,6 +640,7 @@ impl PlayerManager {
         self.queue = tracks;
         self.queue_index = start_index;
         self.next_shuffle_index = None;
+        self.shuffle_history.clear();
 
         if track_uri.is_some() {
             let track_to_play = self.queue[start_index].clone();
@@ -767,21 +763,25 @@ impl PlayerManager {
             return Ok(SwitchPlan::Paused);
         }
         let len = self.queue.len();
-        let start_next = if self.shuffle {
+        let prev_index = self.queue_index;
+        let is_shuffle = self.play_mode == PlayMode::Shuffle;
+        let start_next = if is_shuffle {
             self.next_shuffle_index
                 .take()
                 .filter(|&idx| idx < len && (len == 1 || idx != self.queue_index))
-                .unwrap_or_else(|| (self.queue_index + 1 + (now_millis() as usize % (len.max(2) - 1))) % len)
-        } else if self.queue_index + 1 < len {
-            self.queue_index + 1
-        } else if self.repeat == Repeat::Context {
-            0
+                .unwrap_or_else(|| self.pick_shuffle_index(len))
         } else {
-            self.pause()?;
-            return Ok(SwitchPlan::Paused);
+            (self.queue_index + 1) % len
         };
 
-        self.find_next_playable_load(start_next, 0, self.context_href.clone())
+        let plan = self.find_next_playable_load(start_next, 0, self.context_href.clone())?;
+        if is_shuffle && len > 1 && self.queue_index != prev_index {
+            if self.shuffle_history.len() >= 64 {
+                self.shuffle_history.remove(0);
+            }
+            self.shuffle_history.push(prev_index);
+        }
+        Ok(plan)
     }
 
     /// Advances to the next candidate track after an unplayable track failed to load.
@@ -793,7 +793,7 @@ impl PlayerManager {
         let len = self.queue.len();
         let next_idx = (self.queue_index + 1) % len;
         let next_attempts = prev_attempts + 1;
-        if next_attempts >= len || (next_idx == 0 && self.repeat != Repeat::Context && !self.shuffle) {
+        if next_attempts >= len {
             self.pause()?;
             return Err(EngineError::new(ErrorCode::NotFound, "列表中没有可播放的歌曲（可能需要 VIP）"));
         }
@@ -814,9 +814,6 @@ impl PlayerManager {
             if has_marked_playable && !self.queue[idx].playable {
                 idx = (idx + 1) % len;
                 attempts += 1;
-                if idx == 0 && self.repeat != Repeat::Context && !self.shuffle {
-                    break;
-                }
                 continue;
             }
             self.queue_index = idx;
@@ -836,13 +833,21 @@ impl PlayerManager {
         if self.queue.is_empty() {
             return Ok(SwitchPlan::Paused);
         }
-        let prev_idx = if self.queue_index > 0 {
-            self.queue_index - 1
-        } else if self.repeat == Repeat::Context {
-            self.queue.len() - 1
+        let len = self.queue.len();
+        let has_marked_playable = self.queue.iter().any(|t| t.playable);
+        let from_history = if self.play_mode == PlayMode::Shuffle {
+            let mut found = None;
+            while let Some(idx) = self.shuffle_history.pop() {
+                if idx < len && (len == 1 || idx != self.queue_index) && (!has_marked_playable || self.queue[idx].playable) {
+                    found = Some(idx);
+                    break;
+                }
+            }
+            found
         } else {
-            0
+            None
         };
+        let prev_idx = from_history.unwrap_or_else(|| (self.queue_index + len - 1) % len);
 
         self.queue_index = prev_idx;
         let track = self.queue[prev_idx].clone();
@@ -896,18 +901,13 @@ impl PlayerManager {
         Ok(())
     }
 
-    /// Sets shuffle mode.
-    pub fn set_shuffle(&mut self, on: bool) -> Result<(), EngineError> {
-        self.shuffle = on;
-        if !on {
+    /// Sets the playback mode.
+    pub fn set_play_mode(&mut self, mode: PlayMode) -> Result<(), EngineError> {
+        self.play_mode = mode;
+        if mode != PlayMode::Shuffle {
             self.next_shuffle_index = None;
+            self.shuffle_history.clear();
         }
-        Ok(())
-    }
-
-    /// Sets repeat mode.
-    pub fn set_repeat(&mut self, mode: Repeat) -> Result<(), EngineError> {
-        self.repeat = mode;
         Ok(())
     }
 
@@ -951,7 +951,7 @@ impl PlayerManager {
         };
 
         if ended {
-            if self.repeat == Repeat::Track {
+            if self.play_mode == PlayMode::RepeatOne {
                 return TickAction::ReplayCurrent;
             }
             return TickAction::Ended;
@@ -1080,6 +1080,77 @@ mod tests {
             panic!("expected next track load");
         };
         assert_eq!(next_track.uri, "netease:track:3");
+
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn play_modes_cycle_wrap_replay_and_shuffle_history() {
+        let data = std::env::temp_dir().join(format!("nsh-music-play-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).unwrap();
+        let client = Arc::new(NetEaseClient::new(&data));
+        let mut manager = PlayerManager::new(client);
+
+        let tracks = (1..=4)
+            .map(|i| Track {
+                uri: format!("netease:track:{i}"),
+                name: format!("Track {i}"),
+                duration_ms: 10_000.0,
+                playable: true,
+                ..Track::default()
+            })
+            .collect();
+
+        let SwitchPlan::Load { load_id, .. } = manager
+            .prepare_context("netease:playlist:1", Some("netease:track:4"), tracks)
+            .unwrap()
+        else {
+            panic!("expected SwitchPlan::Load");
+        };
+        manager.finish_track_load(load_id, PreparedAudio { source: None, cancel: None });
+        assert_eq!(manager.state().play_mode, PlayMode::RepeatAll);
+        assert!(manager.state().can_next);
+        assert!(manager.state().can_previous);
+
+        // RepeatAll wraps around from the last track to the first, and back again on Previous.
+        let SwitchPlan::Load { load_id, track, .. } = manager.prepare_next().unwrap() else {
+            panic!("expected wrap to first track");
+        };
+        assert_eq!(track.uri, "netease:track:1");
+        manager.finish_track_load(load_id, PreparedAudio { source: None, cancel: None });
+        let SwitchPlan::Load { load_id, track, .. } = manager.prepare_previous().unwrap() else {
+            panic!("expected wrap to last track");
+        };
+        assert_eq!(track.uri, "netease:track:4");
+        manager.finish_track_load(load_id, PreparedAudio { source: None, cancel: None });
+
+        // RepeatOne replays on tick() end, while manual Next still advances.
+        manager.set_play_mode(PlayMode::RepeatOne).unwrap();
+        manager.position_ms = 10_000.0;
+        manager.stream_state = None;
+        assert_eq!(manager.tick(), TickAction::ReplayCurrent);
+        let SwitchPlan::Load { load_id, track, .. } = manager.prepare_next().unwrap() else {
+            panic!("expected manual next in RepeatOne");
+        };
+        assert_eq!(track.uri, "netease:track:1");
+        manager.finish_track_load(load_id, PreparedAudio { source: None, cancel: None });
+
+        // Shuffle records history so Previous returns to the previous track.
+        manager.set_play_mode(PlayMode::Shuffle).unwrap();
+        let SwitchPlan::Load { load_id, track: shuffled, .. } = manager.prepare_next().unwrap() else {
+            panic!("expected shuffled next");
+        };
+        assert_ne!(shuffled.uri, "netease:track:1");
+        manager.finish_track_load(load_id, PreparedAudio { source: None, cancel: None });
+        let SwitchPlan::Load { track: back, .. } = manager.prepare_previous().unwrap() else {
+            panic!("expected previous from shuffle history");
+        };
+        assert_eq!(back.uri, "netease:track:1");
+
+        // Switching away from Shuffle clears shuffle history.
+        manager.set_play_mode(PlayMode::RepeatAll).unwrap();
+        assert!(manager.shuffle_history.is_empty());
 
         let _ = std::fs::remove_dir_all(data);
     }

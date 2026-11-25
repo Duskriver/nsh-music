@@ -22,7 +22,7 @@ import {
   type Lyrics,
   type Me,
   type PlayerState,
-  type RepeatMode,
+  type PlayMode,
   type SearchResults,
 } from "./types";
 
@@ -68,9 +68,7 @@ function player(native: NativePlayer | null | undefined): PlayerState {
     positionMs: native.positionMs,
     durationMs: native.durationMs,
     at: native.at || Date.now(),
-    shuffle: native.shuffle,
-    shuffleAvailable: native.shuffleAvailable,
-    repeat: native.repeat,
+    playMode: native.playMode,
     quality: native.quality,
     volume: native.volume,
     muted: native.muted,
@@ -205,12 +203,8 @@ export class EngineBackend implements Backend {
     return call(() => this.#engine.setVolume(volume));
   }
 
-  setShuffle(on: boolean): Promise<void> {
-    return call(() => this.#engine.setShuffle(on));
-  }
-
-  setRepeat(mode: RepeatMode): Promise<void> {
-    return call(() => this.#engine.setRepeat(mode));
+  setPlayMode(mode: PlayMode): Promise<void> {
+    return call(() => this.#engine.setPlayMode(mode));
   }
 
   setQuality(quality: AudioQuality): Promise<void> {

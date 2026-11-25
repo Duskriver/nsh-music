@@ -27,7 +27,7 @@ export function PlayerBar() {
   const light = () => cover() || String(token("primary"));
   // The controls take the same colour.
   effect(() => setCoverTint(cover()));
-  // Too narrow for shuffle and repeat beside the rest.
+  // Too narrow for the play mode button beside the rest.
   const tiny = () => windowSize().width < 560;
   const stacked = () => barSize() === "stacked";
   return (

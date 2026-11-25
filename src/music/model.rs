@@ -184,26 +184,26 @@ pub struct LyricLine {
     pub words: String,
 }
 
-/// How the player repeats.
+/// How the player advances through the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, PropEnum)]
 #[serde(rename_all = "camelCase")]
-pub enum Repeat {
-    /// It stops at the end of the context.
+pub enum PlayMode {
+    /// Loops the current context in order.
     #[default]
-    Off,
-    /// It plays the context again.
-    Context,
-    /// It plays the track again.
-    Track,
+    RepeatAll,
+    /// Repeats the current track.
+    RepeatOne,
+    /// Picks the next track at random and keeps looping.
+    Shuffle,
 }
 
-impl Repeat {
+impl PlayMode {
     /// The serialized name.
     pub fn as_str(self) -> &'static str {
         match self {
-            Repeat::Off => "off",
-            Repeat::Context => "context",
-            Repeat::Track => "track",
+            PlayMode::RepeatAll => "repeatAll",
+            PlayMode::RepeatOne => "repeatOne",
+            PlayMode::Shuffle => "shuffle",
         }
     }
 }
@@ -282,12 +282,8 @@ pub struct Player {
     /// When `positionMs` was sampled, in epoch milliseconds: while playing,
     /// the position now is `positionMs + (Date.now() - at)`.
     pub at: f64,
-    /// Whether shuffle is on.
-    pub shuffle: bool,
-    /// Whether shuffle can be changed.
-    pub shuffle_available: bool,
-    /// How it repeats.
-    pub repeat: Repeat,
+    /// How the player advances through the queue.
+    pub play_mode: PlayMode,
     /// Preferred audio streaming quality.
     pub quality: AudioQuality,
     /// The volume, 0 to 1.

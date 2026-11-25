@@ -6,10 +6,11 @@ import { cleanup, createMotion, effect, type Motion, type MotionSpec, reduceMoti
 import { Button } from "nsh/base";
 import { regionItem } from "../ui/regions";
 import { clock } from "../../backend/types";
+import type { PlayMode } from "../../backend/types";
 import { setNowPlayingOpen } from "../../state/overlays";
 import {
   controlsEnabled,
-  cycleRepeat,
+  cyclePlayMode,
   dragSeek,
   dragVolume,
   hasTrack,
@@ -23,7 +24,6 @@ import {
   toggle,
   toggleLike,
   toggleMute,
-  toggleShuffle,
   volumeLevel,
 } from "../../state/player";
 import { ready } from "../../state/session";
@@ -33,40 +33,36 @@ import type { IconName } from "../ui/icons";
 import { lazyMotion } from "../ui/motion";
 import { DURATION, EASING, SCALE, SPRING } from "../ui/tokens";
 
-const REPEAT_LABEL = { off: "Repeat", context: "Repeat one", track: "Don't repeat" } as const;
+const PLAY_MODE_META: Record<PlayMode, { icon: IconName; label: string; short: string }> = {
+  repeatAll: { icon: "repeat", label: "Play mode: Repeat all", short: "Mode: All" },
+  repeatOne: { icon: "repeatOne", label: "Play mode: Repeat one", short: "Mode: One" },
+  shuffle: { icon: "shuffle", label: "Play mode: Shuffle", short: "Mode: Shuffle" },
+};
 
-/** Shuffle, previous, play / pause, next and repeat. `quiet`: a faint play
- * button (Now Playing). */
+/** Previous, play / pause, next and playback mode (centered around play). */
 export function TransportControls(props: { large?: boolean; minimal?: boolean; quiet?: boolean }) {
   const icon = () => (props.large ? 22 : 18);
   const side = () => (props.large ? 18 : 18);
   const usable = () => controlsEnabled();
+  const mode = () => PLAY_MODE_META[player().playMode];
   return (
     <View class={`flex-row items-center ${props.large ? "gap-6" : "gap-4"}`} role="toolbar" accessibilityLabel="Playback">
-      <If when={!props.minimal}>
-        <IconButton
-          name="shuffle"
-          label="Shuffle"
-          size={side()}
-          pressed={player().shuffle}
-          tinted
-          disabled={!usable() || !player().shuffleAvailable}
-          onPress={toggleShuffle}
-        />
+      <If when={!props.minimal && !terminal}>
+        {/* Balances the single mode button on the right so Play stays centred. */}
+        <View style={{ width: side() + 16 }} />
       </If>
       <IconButton name="skipBack" label="Previous" short="Prev" size={icon()} disabled={!usable() || !player().canPrevious} onPress={previous} />
       <PlayButton tinted quiet={props.quiet} playing={player().playing} size={props.large ? 56 : 36} disabled={!ready() || !hasTrack()} onPress={toggle} />
       <IconButton name="skipForward" label="Next" size={icon()} disabled={!usable() || !player().canNext} onPress={next} />
       <If when={!props.minimal}>
         <IconButton
-          name={player().repeat === "track" ? "repeatOne" : "repeat"}
-          label={REPEAT_LABEL[player().repeat]}
-          short={player().repeat === "off" ? "Repeat" : player().repeat === "context" ? "Repeat: all" : "Repeat: one"}
+          name={mode().icon}
+          label={mode().label}
+          short={mode().short}
           size={side()}
-          pressed={player().repeat !== "off"}
-          tinted
+          hint
           disabled={!usable()}
-          onPress={cycleRepeat}
+          onPress={cyclePlayMode}
         />
       </If>
     </View>

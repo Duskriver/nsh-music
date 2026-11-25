@@ -332,9 +332,9 @@ header starts 30pt in). Phones stack it, centred, the cover up to 160 wide.
 
 - `IconButton`: borderless, a disc of size + 16 (18pt glyph, 34pt target).
   The glyph is at 70% and brightens on hover. A toggle that is on draws the
-  glyph at full strength with a 4pt dot under it: `foreground` for the
-  player's toggles (`tinted`: shuffle, repeat), `primary` elsewhere; Like
-  turns `liked` instead, with no dot. Disabled at 30%. `hint` adds a tooltip, for
+  glyph at full strength with a translucent disc under it (`primary` elsewhere,
+  `liked` for Like). The player's mode button cycles through Repeat all, Repeat
+  one and Shuffle with a tooltip (`hint`). Disabled at 30%. `hint` adds a tooltip, for
   icons whose meaning is not obvious.
 - `PlayButton`: a disc, 36 by default (56 in Now Playing, 44/48 in a header,
   29 on a 144 card), glyph at 40% of it. Over pictures: `background/80` with
@@ -365,7 +365,7 @@ the sidebar):
 |---|---|
 | ≥ 760 | **Full**: what plays (44pt round cover, title, artist) and Like on the left quarter; the transport over an inline position bar in the middle (up to 720); the volume (always open, 96) and the light menu on the right |
 | 520–760 | **Compact**, one row: cover, title and Like on the left; the transport and the light menu on the right. No position or volume (Now Playing has both) |
-| < 520 | **Stacked**, two rows, radius 36: cover, title and artist centred, and Like; under them the transport centred and the light menu at the end. Under a 560 window, shuffle and repeat go too |
+| < 520 | **Stacked**, two rows, radius 36: cover, title and artist centred, and Like; under them the transport centred and the light menu at the end. Under a 560 window, the play mode button goes too |
 
 - Controls are quiet: a faint play disc, thin faint sliders, 18pt icons.
 - The light menu (✦) is always the last control on the right.

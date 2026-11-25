@@ -8,7 +8,7 @@
 // drops its change, so nothing stays on screen that did not happen.
 
 import { Animated, cleanup, type CompositeAnimation, computed, createAnimatedValue, Easing, effect, signal, Storage, untracked } from "nsh";
-import { type AudioQuality, EMPTY_PLAYER, type Item, type PlayerState, positionAt, type RepeatMode, type Track } from "../backend/types";
+import { type AudioQuality, EMPTY_PLAYER, type Item, type PlayerState, type PlayMode, positionAt, type Track } from "../backend/types";
 import { invalidateLikedSongs } from "../data/queries";
 import { backend } from "./engine";
 import { type MessageId, notify, report } from "./feedback";
@@ -309,39 +309,43 @@ export function toggleMute(): void {
   send({ muted }, () => backend.setMuted(muted));
 }
 
-export function toggleShuffle(): void {
-  const shuffle = !player().shuffle;
-  send({ shuffle }, () => backend.setShuffle(shuffle));
+const NEXT_PLAY_MODE: Record<PlayMode, PlayMode> = {
+  repeatAll: "repeatOne",
+  repeatOne: "shuffle",
+  shuffle: "repeatAll",
+};
+
+const PLAY_MODE_KEY = "player:playMode";
+const VALID_PLAY_MODES: PlayMode[] = ["repeatAll", "repeatOne", "shuffle"];
+
+function restoreSetting<T extends string>(key: string, valid: readonly T[], current: () => T, apply: (value: T) => Promise<void>) {
+  const saved = signal<T | null>(null);
+  Storage.getItem(key)
+    .then((v) => {
+      if (v && (valid as readonly string[]).includes(v)) saved.set(v as T);
+    })
+    .catch(() => {});
+  let applied = false;
+  effect(() => {
+    const value = saved();
+    if (!ready() || !value || applied) return;
+    applied = true;
+    if (untracked(current) !== value) apply(value).catch(() => {});
+  });
 }
 
-const NEXT_REPEAT: Record<RepeatMode, RepeatMode> = { off: "context", context: "track", track: "off" };
+restoreSetting(PLAY_MODE_KEY, VALID_PLAY_MODES, () => backend.player().playMode, (mode) => backend.setPlayMode(mode));
 
-export function cycleRepeat(): void {
-  const repeat = NEXT_REPEAT[player().repeat];
-  send({ repeat }, () => backend.setRepeat(repeat));
+/** Cycles the playback mode: Repeat all -> Repeat one -> Shuffle -> Repeat all. */
+export function cyclePlayMode(): void {
+  const playMode = NEXT_PLAY_MODE[player().playMode];
+  Storage.setItem(PLAY_MODE_KEY, playMode).catch(() => {});
+  send({ playMode }, () => backend.setPlayMode(playMode));
 }
 
 const QUALITY_KEY = "player:quality";
 const VALID_QUALITIES: AudioQuality[] = ["standard", "exhigh", "lossless", "hires"];
-const savedQuality = signal<AudioQuality | null>(null);
-
-Storage.getItem(QUALITY_KEY)
-  .then((saved) => {
-    if (saved && (VALID_QUALITIES as string[]).includes(saved)) {
-      savedQuality.set(saved as AudioQuality);
-    }
-  })
-  .catch(() => {});
-
-let appliedSavedQuality = false;
-effect(() => {
-  const saved = savedQuality();
-  if (!ready() || !saved || appliedSavedQuality) return;
-  appliedSavedQuality = true;
-  if (untracked(() => backend.player().quality) !== saved) {
-    backend.setQuality(saved).catch(() => {});
-  }
-});
+restoreSetting(QUALITY_KEY, VALID_QUALITIES, () => backend.player().quality, (quality) => backend.setQuality(quality));
 
 /** Switches the preferred audio streaming quality and remembers it. */
 export function setQuality(quality: AudioQuality): void {

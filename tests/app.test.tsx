@@ -336,3 +336,29 @@ test("audio quality switches and persists", async () => {
   const reopened = await desktop({}, { ...LAUNCHED, "player:quality": "hires" });
   await reopened.waitFor("id:player >> role:button[Audio quality: Hi-Res]");
 });
+
+test("play mode cycles between Repeat all, Repeat one and Shuffle and persists", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Paper Lanterns]");
+  await app.waitFor("role:button[Slow River, The Quiet Fields]");
+  await app.press("role:button[Slow River, The Quiet Fields]");
+  await app.waitFor("id:player >> role:button[Pause]");
+  await app.waitFor("id:player >> role:button[Play mode: Repeat all]");
+
+  await app.press("id:player >> role:button[Play mode: Repeat all]");
+  await app.waitFor("id:player >> role:button[Play mode: Repeat one]");
+  expect(app.storage()["player:playMode"]).toBe("repeatOne");
+
+  await app.press("id:player >> role:button[Play mode: Repeat one]");
+  await app.waitFor("id:player >> role:button[Play mode: Shuffle]");
+  expect(app.storage()["player:playMode"]).toBe("shuffle");
+
+  await app.press("id:player >> role:button[Play mode: Shuffle]");
+  await app.waitFor("id:player >> role:button[Play mode: Repeat all]");
+  expect(app.storage()["player:playMode"]).toBe("repeatAll");
+
+  // Reopening with saved storage restores the selected play mode.
+  const reopened = await desktop({}, { ...LAUNCHED, "player:playMode": "shuffle" });
+  await reopened.waitFor("id:player >> role:button[Play mode: Shuffle]");
+});

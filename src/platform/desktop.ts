@@ -114,6 +114,10 @@ export function installDesktopShell(opts: DesktopShellOptions): DesktopShell {
     win.focus();
   };
 
+  // macOS Dock / Finder reopen (and second launches elsewhere): restore and
+  // focus the main window instead of letting the app stay minimized/hidden.
+  cleanup(Application.on("reopen", showWindow));
+
   if (opts.hideOnClose !== false) {
     win.set({ closeOnPress: false });
     hidesOnClose = true;

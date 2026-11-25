@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use super::{
     command::{Command, CommandOutput},
-    model::{Collection, CoverColor, Header, Home, Item, Library, LyricLine, Lyrics, Me, Player, Repeat, SearchResults, Track},
+    model::{Collection, CoverColor, Header, Home, Item, Library, LyricLine, Lyrics, Me, PlayMode, Player, SearchResults, Track},
     session::{Answer, Session, Snapshot},
 };
 
@@ -110,8 +110,7 @@ pub fn control(player: &mut Player, command: &Command) -> bool {
         Command::Pause => player.playing = false,
         Command::Seek(ms) => player.position_ms = ms.clamp(0.0, player.duration_ms),
         Command::SetVolume(v) => player.volume = v.clamp(0.0, 1.0),
-        Command::SetShuffle(on) => player.shuffle = *on,
-        Command::SetRepeat(mode) => player.repeat = *mode,
+        Command::SetPlayMode(mode) => player.play_mode = *mode,
         Command::SetQuality(quality) => player.quality = *quality,
         Command::SetLiked(on) => player.liked = *on,
         Command::SetMuted(on) => player.muted = *on,
@@ -146,8 +145,7 @@ pub fn player() -> Player {
         position_ms: 64_000.0,
         duration_ms: track.duration_ms,
         at: now_ms(),
-        shuffle_available: true,
-        repeat: Repeat::Off,
+        play_mode: PlayMode::RepeatAll,
         volume: 0.7,
         can_next: true,
         can_previous: true,

@@ -7,8 +7,8 @@ import type { Accessor } from "nsh";
 
 // ---- The player and the session ----------------------------------------
 
-/** How playback repeats. */
-export type RepeatMode = "off" | "context" | "track";
+/** How playback advances through the queue. */
+export type PlayMode = "repeatAll" | "repeatOne" | "shuffle";
 
 /** Preferred audio streaming quality. */
 export type AudioQuality = "standard" | "exhigh" | "lossless" | "hires";
@@ -54,9 +54,7 @@ export interface PlayerState {
   /** When the state was sampled (epoch ms): the UI moves the position on
    * from here while playing. */
   at: number;
-  shuffle: boolean;
-  shuffleAvailable: boolean;
-  repeat: RepeatMode;
+  playMode: PlayMode;
   quality: AudioQuality;
   /** 0 to 1. */
   volume: number;
@@ -78,9 +76,7 @@ export const EMPTY_PLAYER: PlayerState = {
   positionMs: 0,
   durationMs: 0,
   at: 0,
-  shuffle: false,
-  shuffleAvailable: false,
-  repeat: "off",
+  playMode: "repeatAll",
   quality: "exhigh",
   volume: 1,
   muted: false,
@@ -241,8 +237,7 @@ export interface Backend {
   previous(): Promise<void>;
   seek(ms: number): Promise<void>;
   setVolume(volume: number): Promise<void>;
-  setShuffle(on: boolean): Promise<void>;
-  setRepeat(mode: RepeatMode): Promise<void>;
+  setPlayMode(mode: PlayMode): Promise<void>;
   setQuality(quality: AudioQuality): Promise<void>;
   setLiked(on: boolean): Promise<void>;
   setMuted(on: boolean): Promise<void>;
