@@ -58,9 +58,12 @@ export const railSidebar = () => windowSize().width < RAIL;
  * it away entirely. */
 export const sidebarShown = () => !sidebarCollapsed();
 
+/** The desktop sidebar's width when shown, pt (tracked). */
+export const openSidebarWidth = () =>
+  railSidebar() ? RAIL_WIDTH : windowSize().width < ALBUM_COLUMN ? SIDEBAR_MIDDLE : SIDEBAR_WIDE;
+
 /** The desktop sidebar's width now, pt (tracked). */
-export const sidebarWidth = () =>
-  !sidebarShown() ? 0 : railSidebar() ? RAIL_WIDTH : windowSize().width < ALBUM_COLUMN ? SIDEBAR_MIDDLE : SIDEBAR_WIDE;
+export const sidebarWidth = () => (sidebarShown() ? openSidebarWidth() : 0);
 
 /** The user menu's width, pt (tracked): the account row's, so it opens flush
  * with it; from the rail or the header, the wide sidebar's row. */

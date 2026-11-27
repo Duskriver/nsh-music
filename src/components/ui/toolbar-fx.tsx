@@ -11,8 +11,8 @@
 // systems, the demo) effects run at a resting level; paused, they hold
 // still; with reduced motion they rest. In a terminal: a plain box.
 
-import { Animated, type AnimatedValue, cleanup, createAnimatedValue, Easing, effect, type JSX, reduceMotion, Shader, token, View } from "nsh";
-import { audioLevels, liveValues } from "../../platform/audio";
+import { Animated, type AnimatedValue, cleanup, createAnimatedValue, Easing, effect, type JSX, reduceMotion, Shader, signal, token, View } from "nsh";
+import { audioLevels, liveValues, ZERO_FRAME } from "../../platform/audio";
 import { alpha } from "../../state/tint";
 import { terminal } from "./controls";
 
@@ -791,6 +791,16 @@ const MID = 19;
 const TREBLE = 20;
 const SINCE = 21;
 const ONSET = 22;
+const PHASE = 23;
+const CLOCK = 24;
+const SLOTS = 25;
+
+// How long the light's colours take to travel round, and its clock's wrap.
+const PHASE_S = 24;
+const CLOCK_S = 600;
+// A gap this long with no frames from the meter hands the clock back to the
+// native loops (silence, or a platform without metering).
+const FRAME_GAP_MS = 250;
 
 /** Every uniform of HEAD's struct: the music's (live, resting, or still)
  * and the colours, for `effect`. Call in a component's body. The music's
@@ -800,18 +810,69 @@ const ONSET = 22;
 function lightUniforms(props: { effect: ToolbarEffect; colors: string[]; playing: boolean }) {
   const audio = audioLevels();
   const on = () => props.playing && !reduceMotion();
-  const live = liveValues(23);
+  const live = liveValues(SLOTS);
+  // Time moves the light while it plays, metered or not: the colours
+  // travel round every 24 s; the clock wraps every ten minutes, where no
+  // effect shows it. While the music's levels come (about 60 a second),
+  // the clock steps with them, so the light draws once for both and no
+  // more often than the music changes: following the display instead (144
+  // Hz and up) drew it again on every frame, and on Linux each drawing is
+  // a copy of all its pixels through the CPU. While none come (demo, or
+  // silence), two native loops move it, nothing from JS per frame.
+  const phase = createAnimatedValue(0);
+  const clock = createAnimatedValue(0);
+  let started = 0;
+  effect(() => {
+    if (!on()) {
+      phase.set(0);
+      clock.set(0);
+      started = 0;
+      return;
+    }
+    const loop = (value: AnimatedValue, toValue: number, seconds: number) => {
+      value.set(0);
+      const run = Animated.loop(Animated.timing(value, { toValue, duration: seconds * 1000, easing: Easing.linear }));
+      void run.start();
+      return run;
+    };
+    started = Date.now();
+    const runs = [loop(phase, 1, PHASE_S), loop(clock, CLOCK_S, CLOCK_S)];
+    cleanup(() => runs.forEach((r) => r.stop()));
+  });
+  // Whether the music's frames come now: the clock then steps with them.
+  const fed = signal(false);
+  let lastFrame = 0;
+  let watch: ReturnType<typeof setTimeout> | null = null;
+  const watchFrames = () => {
+    watch = setTimeout(() => {
+      watch = null;
+      if (Date.now() - lastFrame > FRAME_GAP_MS) fed.set(false);
+      else watchFrames();
+    }, FRAME_GAP_MS);
+  };
+  cleanup(() => {
+    if (watch !== null) clearTimeout(watch);
+  });
   let lastBeat = -10;
   let lastPulse = 0;
   effect(() => {
     // Paused (or less motion): everything at 0, and the music's frames not
     // followed (not read), so they run nothing here.
     if (!on()) {
-      for (let i = 0; i < 23; i++) live.set(i, 0);
+      for (let i = 0; i < SLOTS; i++) live.set(i, 0);
       live.set(SINCE, 2);
+      fed.set(false);
       return;
     }
     const a = audio();
+    if (a !== ZERO_FRAME && started > 0) {
+      lastFrame = Date.now();
+      const t = (lastFrame - started) / 1000;
+      live.set(PHASE, (t / PHASE_S) % 1);
+      live.set(CLOCK, t % CLOCK_S);
+      fed.set(true);
+      if (watch === null) watchFrames();
+    }
     // Without metering, a resting level keeps the light alive.
     const metered = a.level > 0.02;
     const rest = metered ? 0 : 0.35;
@@ -829,28 +890,6 @@ function lightUniforms(props: { effect: ToolbarEffect; colors: string[]; playing
       live.set(SINCE, Math.min(2, now - lastBeat));
       live.set(ONSET, lastBeat % 600);
     }
-  });
-  // Time moves the light while it plays, metered or not (where nothing
-  // meters the music, as on macOS, no levels come at all): two native
-  // loops, run on the UI thread with nothing from JS per frame. The
-  // colours travel round every 24 s; the clock wraps every ten minutes,
-  // where no effect shows it.
-  const phase = createAnimatedValue(0);
-  const clock = createAnimatedValue(0);
-  effect(() => {
-    if (!on()) {
-      phase.set(0);
-      clock.set(0);
-      return;
-    }
-    const loop = (value: AnimatedValue, toValue: number, seconds: number) => {
-      value.set(0);
-      const run = Animated.loop(Animated.timing(value, { toValue, duration: seconds * 1000, easing: Easing.linear }));
-      void run.start();
-      return run;
-    };
-    const runs = [loop(phase, 1, 24), loop(clock, 600, 600)];
-    cleanup(() => runs.forEach((r) => r.stop()));
   });
   const v = live.values;
   const bands = (from: number) => [v[BAND0 + from], v[BAND0 + from + 1], v[BAND0 + from + 2], v[BAND0 + from + 3]];
@@ -875,8 +914,8 @@ function lightUniforms(props: { effect: ToolbarEffect; colors: string[]; playing
       mid: v[MID],
       treble: v[TREBLE],
       ...extra,
-      phase,
-      clock,
+      phase: fed() ? v[PHASE] : phase,
+      clock: fed() ? v[CLOCK] : clock,
       since: v[SINCE],
       onset: v[ONSET],
     }),

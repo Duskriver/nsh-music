@@ -95,3 +95,27 @@ test("bench 6: visit many pages from the sidebar, then rest", async () => {
   mark("rest");
   await app.wait(5000);
 }, 120000);
+
+test("bench 7: collapse and expand sidebar", async () => {
+  const app = await start();
+  await app.wait(1000);
+  for (let i = 0; i < 2; i++) {
+    mark(`collection-collapse-${i + 1}`);
+    await app.press("role:button[Collapse sidebar]");
+    await app.wait(700);
+    mark(`collection-expand-${i + 1}`);
+    await app.press("role:button[Expand sidebar]");
+    await app.wait(700);
+  }
+  await app.press("role:button[Home]");
+  await app.waitFor("Good evening, Ada");
+  await app.wait(1000);
+  for (let i = 0; i < 2; i++) {
+    mark(`home-collapse-${i + 1}`);
+    await app.press("role:button[Collapse sidebar]");
+    await app.wait(700);
+    mark(`home-expand-${i + 1}`);
+    await app.press("role:button[Expand sidebar]");
+    await app.wait(700);
+  }
+}, 120000);
