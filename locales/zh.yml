@@ -1,0 +1,263 @@
+nav:
+  home: 首页
+  search: 搜索
+  library: 音乐库
+  explore: 发现
+  liked: 喜欢
+  settings: 设置
+  goBack: 返回
+  back: 返回
+  goForward: 前进
+  forward: 前进
+  collapseSidebar: 收起侧边栏
+  expandSidebar: 展开侧边栏
+  closeWindow: 关闭窗口
+  header: 顶部栏
+  yourLibrary: 你的音乐库
+
+account:
+  logIn: 登录
+  logOut: 退出登录
+  logOutEllipsis: 退出登录…
+  account: 账号
+  userMenu: "用户菜单：%{name}"
+  aboutEllipsis: 关于…
+  fps: 帧率
+  exit: 退出
+  cancel: 取消
+  close: 关闭
+  retry: 重试
+  signedOutTitle: 你的歌单在这里
+  signedOutBody: 登录网易云音乐账号后即可查看个人音乐库。
+  logOutConfirmTitle: 确定要退出网易云音乐吗？
+  logOutConfirmBody: 退出后将停止当前播放，重新登录后才可继续听歌。
+
+home:
+  title: 首页
+  error: 首页加载失败。
+
+library:
+  error: 音乐库加载失败。
+
+main:
+  unavailable: 网易云音乐暂不可用
+
+search:
+  title: 搜索
+  placeholder: 想听什么歌曲？
+  inputLabel: 搜索音乐
+  searching: 搜索中
+  emptyTitle: 搜索音乐
+  emptyDetail: 查找歌曲、歌手、专辑与歌单。
+  error: 搜索失败。
+  noResultsTitle: 没有找到相关结果
+  noResultsDetail: 请检查拼写，或尝试减少关键词。
+  songs: 歌曲
+  artists: 歌手
+  albums: 专辑
+  playlists: 歌单
+
+collection:
+  kind:
+    album: 专辑
+    artist: 歌手
+    collection: 歌单
+    playlist: 歌单
+  discography: 音乐作品
+  empty: 暂无内容
+  loginRequired: 登录后即可查看此页面。
+  error: 页面加载失败。
+  trackHeader:
+    title: 标题
+    album: 专辑
+  explicit: 脏标
+
+sort:
+  sortBy: 排序方式
+  viewAs: 视图样式
+  asc: 升序
+  desc: 降序
+  label: "歌曲排序：%{label}"
+  labelDir: "歌曲排序：%{label}（%{direction}）"
+  itemDir: "%{label}（%{direction}）"
+  orders:
+    custom: 默认排序
+    title: 标题
+    artist: 歌手
+    album: 专辑
+    added: 最近添加
+    release: 发行日期
+    duration: 时长
+  views:
+    compact: 紧凑
+    list: 列表
+
+player:
+  toolbar: 播放器
+  playback: 播放控制
+  play: 播放
+  pause: 暂停
+  previous: 上一首
+  prevShort: 上一首
+  next: 下一首
+  position: 播放进度
+  volume: 音量
+  mute: 静音
+  unmute: 取消静音
+  saveLiked: 添加到我喜欢的音乐
+  removeLiked: 从我喜欢的音乐中移除
+  likeShort: 喜欢
+  likedShort: 已喜欢
+  nothingPlaying: 暂无播放
+  openNowPlaying: "打开正在播放：%{title}"
+  openNowPlayingWithArtist: "打开正在播放：%{title}，%{artist}"
+  closeNowPlaying: 关闭正在播放
+  lyrics:
+    label: 歌词
+    show: 显示歌词
+    hide: 隐藏歌词
+    idle: 播放歌曲时将在此显示歌词。
+    loading: 正在加载歌词
+    error: 歌词加载失败。
+    empty: 暂无歌词。
+    providedBy: "歌词来源：%{provider}"
+  playMode:
+    repeatAll: 列表循环
+    repeatOne: 单曲循环
+    shuffle: 随机播放
+    labelRepeatAll: "播放模式：列表循环"
+    labelRepeatOne: "播放模式：单曲循环"
+    labelShuffle: "播放模式：随机播放"
+    shortRepeatAll: "模式：循环"
+    shortRepeatOne: "模式：单曲"
+    shortShuffle: "模式：随机"
+  quality:
+    label: "音质：%{label}"
+    tooltip: "音质：%{label} (%{detail})"
+    standard: 标准
+    exhigh: 极高
+    lossless: 无损
+    hires: Hi-Res
+  light:
+    label: "光效：%{name}"
+    short: 光效
+    random: 随机光效
+    randomActive: "随机 (%{name})"
+    effects:
+      dots: 星点
+      grid: 网格
+      wave: 声浪
+      orb: 光球
+      spectrum: 频谱
+      bars: 柱状
+      ribbons: 丝带
+      halo: 光晕
+      aurora: 极光
+      mountains: 山峦
+      mesh: 流彩
+      particles: 粒子
+      strings: 琴弦
+      current: 电流
+
+settings:
+  title: 设置
+  sections:
+    playback: 播放
+    appearance: 外观
+    behavior: 行为
+    storage: 存储
+    account: 账号与应用
+  audioQuality:
+    title: 音频音质
+    description: 选择在线播放音质，切换后将重新加载当前歌曲。
+  playMode:
+    title: 播放模式
+    description: 当前歌曲播放结束后的切歌方式。
+  lyricsDefault:
+    title: 默认显示歌词
+    description: 打开「正在播放」页面时默认展开同步歌词。
+  language:
+    title: 界面语言
+    description: 选择界面显示语言，或跟随系统设置。
+    system: 跟随系统
+    zhCN: 简体中文
+    en: English
+  theme:
+    title: 主题外观
+    description: 选择浅色、深色或跟随系统外观。
+    controlledBySystem: 当前由系统主题控制。
+    system: 跟随系统
+    light: 浅色
+    dark: 深色
+  musicLight:
+    title: 音乐光效
+    description: 播放栏与「正在播放」页面背景的着色器效果。
+    a11y: "音乐光效：%{name}"
+  density:
+    title: 歌单列表密度
+    description: 歌单与「我喜欢的音乐」中的歌曲行间距。
+  hideOnClose:
+    title: 关闭窗口时最小化到托盘
+    description: 隐藏主窗口而不退出应用，保持后台继续播放。
+  fps:
+    title: 显示 FPS 监视器
+    description: 显示界面帧率与渲染耗时统计。
+  cache:
+    title: 本地页面缓存
+    empty: 缓存为空。
+    one: 本地已缓存 1 条记录。
+    other: "本地已缓存 %{count} 条记录。"
+    clear: 清除缓存
+    cleared: 本地缓存已清除。
+  account:
+    notSignedIn: 未登录
+    signedInDesc: 已登录网易云音乐账号。
+    signedOutDesc: 登录后可查看个人歌单并播放完整歌曲。
+  updates:
+    version: "版本 %{version}"
+    check: 检查更新
+    checking: 检查中…
+    upToDate: 当前已是最新版本。
+  help:
+    title: 帮助
+    description: 键盘快捷键说明与项目信息。
+    shortcuts: 键盘快捷键
+
+dialogs:
+  shortcuts:
+    title: 键盘快捷键
+    sections:
+      regions: 区域跳转
+      inRegion: 区域内导航
+      playback: 播放控制
+      pages: 页面操作
+    goToSidebar: 跳转到侧边栏
+    goToPage: 跳转到主页面
+    goToHeader: 跳转到顶部栏
+    goToPlayer: 跳转到播放栏
+    moveBetweenItems: 在项目间移动
+    firstAndLast: 第一项与最后一项
+    pageUpDown: 上下翻页
+    playOrOpen: 播放或打开
+    nextPrevControl: 下一个或上一个控件
+    playAndPause: 播放与暂停
+    nextTrack: 下一首
+    prevTrack: 上一首
+    goBack: 返回上一页
+    closeOrBack: 关闭或返回
+    openSettings: 打开设置
+    showShortcuts: 显示快捷键帮助
+  about:
+    subtitle: 原生网易云音乐桌面客户端
+    disclaimer: nsh-music 是非官方的网易云音乐客户端。
+    rights: 音乐、歌词与封面版权均归各自权利人所有。
+    builtWithNsh: 基于 NSH 构建
+    sourceOnGithub: GitHub 源码
+  firstRun:
+    welcome: 欢迎使用 nsh-music
+    startListening: 开始听歌
+    notNow: 暂不登录
+  signingIn:
+    title: 扫码登录网易云音乐
+    prompt: 请使用网易云音乐手机 App 扫码并在手机上确认登录
+    retry: 重新扫码

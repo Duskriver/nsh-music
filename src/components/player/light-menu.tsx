@@ -7,12 +7,13 @@
 
 import { Scroll, signal, Text, View } from "nsh";
 import { Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
+import { t } from "../../i18n";
 import { regionItem } from "../ui/regions";
-import { lightEffect, lightName, lightRandom, setLight } from "../../state/visual";
+import { effectLabel, lightEffect, lightName, lightRandom, setLight } from "../../state/visual";
 import { focusRing, Hint, LAYER, menuItem, popupSurface, terminal } from "../ui/controls";
 import { Icon, iconMotion } from "../ui/icons";
 import { menuPopupHidden, menuPopupLeaving, menuPopupStyle } from "../ui/menu";
-import { EFFECT_NAMES, TOOLBAR_EFFECTS, type ToolbarEffect } from "../ui/toolbar-fx";
+import { TOOLBAR_EFFECTS } from "../ui/toolbar-fx";
 
 // A row's height (`menuItem`'s h-8) and the list's (`max-h-72`).
 const ROW = 32;
@@ -22,7 +23,7 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
   const open = signal(false);
   const hover = iconMotion();
   const size = () => props.size ?? 18;
-  const label = () => `Light: ${lightName()}`;
+  const label = () => t("player.light.label", { name: lightName() });
   // The effects' list: rows of ROW points in a window of VIEW. Where it
   // starts, so the effect in use is in the middle of it.
   const openAt = () => {
@@ -55,7 +56,7 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
           style={terminal ? undefined : { width: size() + 16, height: size() + 16 }}
         >
           <If when={terminal}>
-            <Text class="text-foreground">[Light]</Text>
+            <Text class="text-foreground">[{t("player.light.short")}]</Text>
           </If>
           <If when={!terminal}>
             {/* The same layers as an icon button: a disc under the pointer
@@ -88,7 +89,7 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
             <Icon name="shuffle" size={12} color="muted-foreground" />
           </View>
         </If>
-        <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">Random</Text>
+        <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{t("player.light.random")}</Text>
         <If when={!terminal && lightRandom()}>
           <Icon name="check" size={12} color="foreground" />
         </If>
@@ -112,7 +113,7 @@ export function LightMenu(props: { placement: "top" | "bottom"; size?: number })
             {/* Its number, two digits (01) in monospace, starting where the title
                 does, so the column lines up. */}
             <Text class="font-mono text-xs tabular-nums text-muted-foreground">{String(TOOLBAR_EFFECTS.indexOf(effect()) + 1).padStart(2, "0")}</Text>
-            <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{EFFECT_NAMES[effect()]}</Text>
+            <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{effectLabel(effect())}</Text>
             {/* The one in use: a check on the right. */}
             <If when={!terminal && !lightRandom() && lightEffect() === effect()}>
               <Icon name="check" size={12} color="foreground" />

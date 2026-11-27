@@ -4,6 +4,7 @@
 
 import { cleanup, createMotion, effect, type Motion, type MotionSpec, reduceMotion, signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
+import { t } from "../../i18n";
 import { regionItem } from "../ui/regions";
 import { clock } from "../../backend/types";
 import type { PlayMode } from "../../backend/types";
@@ -33,27 +34,32 @@ import type { IconName } from "../ui/icons";
 import { lazyMotion } from "../ui/motion";
 import { DURATION, EASING, SCALE, SPRING } from "../ui/tokens";
 
-const PLAY_MODE_META: Record<PlayMode, { icon: IconName; label: string; short: string }> = {
-  repeatAll: { icon: "repeat", label: "Play mode: Repeat all", short: "Mode: All" },
-  repeatOne: { icon: "repeatOne", label: "Play mode: Repeat one", short: "Mode: One" },
-  shuffle: { icon: "shuffle", label: "Play mode: Shuffle", short: "Mode: Shuffle" },
-};
+function playModeMeta(mode: PlayMode): { icon: IconName; label: string; short: string } {
+  switch (mode) {
+    case "repeatOne":
+      return { icon: "repeatOne", label: t("player.playMode.labelRepeatOne"), short: t("player.playMode.shortRepeatOne") };
+    case "shuffle":
+      return { icon: "shuffle", label: t("player.playMode.labelShuffle"), short: t("player.playMode.shortShuffle") };
+    default:
+      return { icon: "repeat", label: t("player.playMode.labelRepeatAll"), short: t("player.playMode.shortRepeatAll") };
+  }
+}
 
 /** Previous, play / pause, next and playback mode (centered around play). */
 export function TransportControls(props: { large?: boolean; minimal?: boolean; quiet?: boolean }) {
   const icon = () => (props.large ? 22 : 18);
   const side = () => (props.large ? 18 : 18);
   const usable = () => controlsEnabled();
-  const mode = () => PLAY_MODE_META[player().playMode];
+  const mode = () => playModeMeta(player().playMode);
   return (
-    <View class={`flex-row items-center ${props.large ? "gap-6" : "gap-4"}`} role="toolbar" accessibilityLabel="Playback">
+    <View class={`flex-row items-center ${props.large ? "gap-6" : "gap-4"}`} role="toolbar" accessibilityLabel={t("player.playback")}>
       <If when={!props.minimal && !terminal}>
         {/* Balances the single mode button on the right so Play stays centred. */}
         <View style={{ width: side() + 16 }} />
       </If>
-      <IconButton name="skipBack" label="Previous" short="Prev" size={icon()} disabled={!usable() || !player().canPrevious} onPress={previous} />
+      <IconButton name="skipBack" label={t("player.previous")} short={t("player.prevShort")} size={icon()} disabled={!usable() || !player().canPrevious} onPress={previous} />
       <PlayButton tinted quiet={props.quiet} playing={player().playing} size={props.large ? 56 : 36} disabled={!ready() || !hasTrack()} onPress={toggle} />
-      <IconButton name="skipForward" label="Next" size={icon()} disabled={!usable() || !player().canNext} onPress={next} />
+      <IconButton name="skipForward" label={t("player.next")} size={icon()} disabled={!usable() || !player().canNext} onPress={next} />
       <If when={!props.minimal}>
         <IconButton
           name={mode().icon}
@@ -81,7 +87,7 @@ export function SeekBar(props: { inline?: boolean; quiet?: boolean }) {
     <BarSlider
       tinted
       quiet={props.quiet}
-      label="Playback position"
+      label={t("player.position")}
       value={position()}
       max={duration()}
       fill={positionFill}
@@ -132,7 +138,7 @@ export function VolumeControl(props: { class?: string; collapsible?: boolean; qu
     >
       <IconButton
         name={icon()}
-        label={player().muted ? "Unmute" : "Mute"}
+        label={player().muted ? t("player.unmute") : t("player.mute")}
         disabled={!ready() || !hasTrack()}
         onPress={toggleMute}
       />
@@ -149,7 +155,7 @@ export function VolumeControl(props: { class?: string; collapsible?: boolean; qu
             <BarSlider
               tinted
               quiet={props.quiet}
-              label="Volume"
+              label={t("player.volume")}
               value={volumeLevel()}
               max={1}
               disabled={!ready() || !hasTrack()}
@@ -225,8 +231,8 @@ export function LikeButton(props: { size?: number }) {
         <IconButton
           // Always the filled heart: white while not liked, red once it is.
           name="heartFilled"
-          label={player().liked ? "Remove from Liked Songs" : "Save to Liked Songs"}
-          short={player().liked ? "Liked" : "Like"}
+          label={player().liked ? t("player.removeLiked") : t("player.saveLiked")}
+          short={player().liked ? t("player.likedShort") : t("player.likeShort")}
           size={props.size ?? 18}
           pressed={player().liked}
           pressedColor="liked"
@@ -335,7 +341,7 @@ export function NowPlayingSummary(props: { cover?: number; round?: boolean; open
   const words = (selectable: boolean) => (
     <View class={`min-w-0 flex-1 gap-0.5 ${props.center ? "items-center" : ""}`} style={wordsIn.style} selectable={selectable}>
       <Text class={`line-clamp-1 font-semibold text-foreground ${props.large ? "text-3xl font-extrabold" : "text-sm"} ${props.center ? "text-center" : ""}`}>
-        {player().title || "Nothing playing"}
+        {player().title || t("player.nothingPlaying")}
       </Text>
       <View class={`min-w-0 flex-row items-center gap-2 ${props.center ? "justify-center" : ""}`}>
         <Text class={`line-clamp-1 min-w-0 shrink text-muted-foreground ${props.large ? "text-base" : "text-xs"} ${props.center ? "text-center" : ""}`}>{player().artist}</Text>
@@ -358,7 +364,7 @@ export function NowPlayingSummary(props: { cover?: number; round?: boolean; open
       <Button
         ref={regionItem()}
         testID="open-now-playing"
-        accessibilityLabel={`Open Now Playing: ${player().title}, ${player().artist}`}
+        accessibilityLabel={t("player.openNowPlayingWithArtist", { title: player().title, artist: player().artist })}
         onPress={() => setNowPlayingOpen(true)}
         class={`group min-w-0 flex-1 flex-row items-center gap-3 rounded-full pr-2 active:scale-[0.98] motion-reduce:active:scale-100 ${focusRing}`}
       >

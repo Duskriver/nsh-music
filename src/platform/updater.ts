@@ -57,6 +57,8 @@ export interface UpdateOptions {
     action?: { label: string; run(): void },
     secondary?: { label: string; run(): void },
   ): void;
+  /** Called when a check completes and no package or app update is available. */
+  onUpToDate?(): void;
 }
 
 /** What `checkForUpdates` uses of `nsh/updater` (tests pass their own). */
@@ -71,13 +73,35 @@ export type Updater = Pick<
   | "restartToPackage"
 >;
 
-let checking = false;
-/** The app version whose archive is downloaded and verified, waiting for
- * the user's Restart or On quit; `undefined` until one is. */
-let downloaded: string | undefined;
-/** The app version already staged with `installOnQuit`, so later checks
- * don't re-notify for the same update. */
-let staged: string | undefined;
+/** Where the updates of one `nsh/updater` stand (tests pass their own). */
+interface State {
+  /** The check in progress, if any: it holds `nsh/updater`, which runs one
+   * operation at a time. */
+  checking?: Promise<void>;
+  /** Whether Restart / On quit is installing or staging an update. */
+  installing: boolean;
+  /** The app update downloaded and verified, waiting for the user's
+   * Restart or On quit: its version and archive URL. `checkForUpdate`
+   * keeps the download of the same version only while the manifest's
+   * archive (its SHA-256, which it does not report) stays the same, so
+   * `restart` downloads again when it finds the download gone. */
+  downloaded?: { version: string; url: string };
+  /** The app version already staged with `installOnQuit`, so later checks
+   * don't re-notify for the same update. */
+  staged?: string;
+  /** The latest update (package or app) a check found; a newer check
+   * replaces it, so a Restart or On quit from an older message does
+   * nothing. */
+  offered: number;
+}
+
+const states = new WeakMap<Updater, State>();
+
+function stateOf(updater: Updater): State {
+  let state = states.get(updater);
+  if (!state) states.set(updater, (state = { installing: false, offered: 0 }));
+  return state;
+}
 
 /**
  * Checks for a newer build of the app's TSX (downloaded, it runs from the
@@ -90,46 +114,65 @@ let staged: string | undefined;
  * Resolves when done; never rejects. In development runs and on the web
  * it finds nothing.
  */
-export async function checkForUpdates(opts: UpdateOptions, updater: Updater = nshUpdater): Promise<void> {
-  if (checking) return;
-  checking = true;
+export function checkForUpdates(opts: UpdateOptions, updater: Updater = nshUpdater): Promise<void> {
+  const state = stateOf(updater);
+  if (state.checking || state.installing) return Promise.resolve();
+  const check = runCheck(state, opts, updater).finally(() => {
+    state.checking = undefined;
+  });
+  state.checking = check;
+  return check;
+}
+
+async function runCheck(state: State, opts: UpdateOptions, updater: Updater): Promise<void> {
   try {
     const pkg = await updater.checkForPackage();
     if (pkg) {
       await updater.downloadPackage();
+      // The package replaces what an earlier check offered: it runs from
+      // the next start.
+      const offer = ++state.offered;
       if (canRestart) {
         opts.notify(`nsh-music ${pkg.version} is ready.`, {
           label: "Restart",
-          run: () => void updater.restartToPackage().catch((e: unknown) => console.warn("update: restart failed:", e)),
+          run: () => void runAction(state, offer, () => restartToPackage(updater)),
         });
       }
       return;
     }
     const app = await updater.checkForUpdate();
-    if (!app) return;
-    if (staged === app.version) return;
+    // What this check found replaces what an earlier one offered.
+    const offer = ++state.offered;
+    // `checkForUpdate` drops its download when it finds no update it can
+    // install.
+    if (!app?.canInstall) state.downloaded = undefined;
+    if (!app) {
+      opts.onUpToDate?.();
+      return;
+    }
+    if (state.staged === app.version) return;
     if (app.canInstall) {
-      // The same version found again keeps its download (`checkForUpdate`):
-      // a later check only offers it again.
-      if (downloaded !== app.version) {
+      const same = state.downloaded?.version === app.version && state.downloaded.url === app.url;
+      if (!same) {
+        state.downloaded = undefined;
         try {
           await updater.downloadUpdate();
-          downloaded = app.version;
+          state.downloaded = { version: app.version, url: app.url };
         } catch (error) {
           console.warn("update: download failed:", error);
         }
       }
-      if (downloaded === app.version) {
+      if (state.downloaded) {
         const readyMessage = app.shell ? `App shell ${app.version} is ready.` : `nsh-music ${app.version} is ready.`;
         opts.notify(
           readyMessage,
           {
             label: "Restart",
-            run: () => void installApp(app.version, opts, updater),
+            run: () => void runAction(state, offer, () => installApp(state, app.version, opts, updater)),
           },
           {
             label: "On quit",
-            run: () => void stageApp(app.version, opts, updater),
+            run: () => void runAction(state, offer, () => stageApp(state, app.version, opts, updater)),
           },
         );
         return;
@@ -141,35 +184,63 @@ export async function checkForUpdates(opts: UpdateOptions, updater: Updater = ns
     });
   } catch (error) {
     console.warn("update check failed:", error);
-  } finally {
-    checking = false;
   }
 }
 
-async function installApp(version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
-  // Unpacking and checking the new app takes a few seconds before it quits.
-  opts.notify(`Updating to nsh-music ${version}…`);
+/** Runs `go` for the action of `offer`, unless a later check offered
+ * something else or an install/stage is already under way. */
+async function runAction(state: State, offer: number, go: () => Promise<void>): Promise<void> {
+  if (state.installing) return;
+  // A check in progress holds the updater; it may also find something
+  // newer, which it offers in its own message.
+  await state.checking;
+  if (offer !== state.offered || state.installing) return;
+  state.installing = true;
   try {
-    await updater.installAndRestart(); // Settles only on failure.
+    await go();
+  } finally {
+    state.installing = false;
+  }
+}
+
+async function restartToPackage(updater: Updater): Promise<void> {
+  await updater.restartToPackage().catch((e: unknown) => console.warn("update: restart failed:", e));
+}
+
+async function installApp(state: State, version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
+  try {
+    // Unpacking and checking the new app takes a few seconds before it quits.
+    opts.notify(`Updating to nsh-music ${version}…`);
+    try {
+      await updater.installAndRestart(); // Settles only on failure.
+    } catch (error) {
+      // A later check of the same version found a different archive, and
+      // dropped this one: download that one now, then install it.
+      if (!String(error).includes("nothing is downloaded")) throw error;
+      state.downloaded = undefined;
+      opts.notify(`Downloading nsh-music ${version}…`);
+      await updater.downloadUpdate();
+      opts.notify(`Updating to nsh-music ${version}…`);
+      await updater.installAndRestart();
+    }
   } catch (error) {
     console.warn("update: install failed:", error);
-    // The next check downloads it again (`checkForUpdate` may have
-    // dropped this download for a different archive of the version).
-    if (downloaded === version) downloaded = undefined;
-    if (staged === version) staged = undefined;
+    // The next check downloads it again.
+    state.downloaded = undefined;
+    if (state.staged === version) state.staged = undefined;
     opts.notify("The update could not be installed.");
   }
 }
 
-async function stageApp(version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
+async function stageApp(state: State, version: string, opts: UpdateOptions, updater: Updater): Promise<void> {
   try {
     await updater.installOnQuit();
-    staged = version;
+    state.staged = version;
     opts.notify(`nsh-music ${version} will install on quit.`);
   } catch (error) {
     console.warn("update: stage failed:", error);
-    if (downloaded === version) downloaded = undefined;
-    if (staged === version) staged = undefined;
+    state.downloaded = undefined;
+    if (state.staged === version) state.staged = undefined;
     opts.notify("The update could not be installed.");
   }
 }

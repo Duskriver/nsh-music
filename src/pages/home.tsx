@@ -1,6 +1,7 @@
 // Home: the greeting, then the sections of the day.
 
 import { List, Text, untracked, View } from "nsh";
+import { t } from "../i18n";
 import { pageEnd, playerOverlap } from "../components/layout";
 import { homeQuery } from "../data/queries";
 import { CardRow } from "../components/library/cards";
@@ -25,7 +26,7 @@ function Greeting(props: { text: string; entrance?: boolean }) {
 export function HomePage() {
   const home = homeQuery();
   return (
-    <AppPage title="Home" testID="page-home" shown={() => currentRoute().name === "home"}>
+    <AppPage title={t("home.title")} testID="page-home" shown={() => currentRoute().name === "home"}>
       {/* Virtualized both ways: the sections down the page are a list, and
           each section's cards a list across, so only what is near the view
           exists. */}
@@ -33,9 +34,9 @@ export function HomePage() {
         data={home.data()}
         placeholder={
           <View class={terminal ? "gap-1" : `gap-8 px-3 ${pageEnd()}`}>
-            <Greeting text="Home" entrance />
+            <Greeting text={t("home.title")} entrance />
             <If when={home.error()} else={<CardsSkeleton />}>
-              <ErrorState message="Home didn't load." onRetry={home.refetch} />
+              <ErrorState message={t("home.error")} onRetry={home.refetch} />
             </If>
           </View>
         }
@@ -66,7 +67,7 @@ export function HomePage() {
             estimatedItemSize={terminal ? 4 : 270}
             class="flex-1"
             contentClass={terminal ? "" : "px-3"}
-            header={() => <Greeting text={data().greeting || "Home"} entrance={instant} />}
+            header={() => <Greeting text={data().greeting || t("home.title")} entrance={instant} />}
             footer={() => <View class={pageEnd()} />}
           >
             {(section, i) => (

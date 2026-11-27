@@ -4,6 +4,7 @@
 
 import { createMotion, signal, Text, token, untracked, View } from "nsh";
 import { Input, Toolbar } from "nsh/base";
+import { t } from "../i18n";
 import { Region } from "./ui/regions";
 import { back, canBack, canForward, currentRoute, forward, open, SEARCH } from "../nav";
 import { DISTANCE, SPRING } from "./ui/tokens";
@@ -22,7 +23,7 @@ export function AccountAction() {
   return (
     <View class="flex-row items-center gap-2">
       <If when={signedIn() === false}>
-        <ActionButton label="Log in" variant="primary" onPress={signIn} />
+        <ActionButton label={t("account.logIn")} variant="primary" onPress={signIn} />
       </If>
     </View>
   );
@@ -37,7 +38,7 @@ export function SearchField() {
   const onSearch = () => currentRoute().name === "search";
   const expanded = signal(onSearch() && query().trim() !== "");
   return (
-    <If when={expanded() || onSearch()} else={<IconButton name="search" label="Search" hint onPress={() => expanded.set(true)} />}>
+    <If when={expanded() || onSearch()} else={<IconButton name="search" label={t("nav.search")} hint onPress={() => expanded.set(true)} />}>
       <SearchBox
         onSearch={onSearch()}
         onDone={() => expanded.set(false)}
@@ -81,8 +82,8 @@ function SearchBox(props: { onSearch: boolean; onDone: () => void }) {
         onKeyPress={({ key }) => {
           if (key === "Escape" && !props.onSearch) props.onDone();
         }}
-        placeholder="What do you want to play?"
-        accessibilityLabel="Search music"
+        placeholder={t("search.placeholder")}
+        accessibilityLabel={t("search.inputLabel")}
         returnKeyType="search"
         submitBehavior="submit"
         autoFocus
@@ -109,16 +110,16 @@ export function NavControls() {
       <If when={desktop() && !terminal}>
         <IconButton
           name={sidebarCollapsed() ? "sidebarExpand" : "sidebarCollapse"}
-          label={sidebarCollapsed() ? "Expand sidebar" : "Collapse sidebar"}
+          label={sidebarCollapsed() ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
           hint
           onPress={toggleSidebar}
         />
       </If>
       <If when={canBack() || desktop()}>
-        <IconButton name="chevronLeft" label="Go back" short="Back" disabled={!canBack()} onPress={back} />
+        <IconButton name="chevronLeft" label={t("nav.goBack")} short={t("nav.back")} disabled={!canBack()} onPress={back} />
       </If>
       <If when={desktop()}>
-        <IconButton name="chevronRight" label="Go forward" short="Forward" disabled={!canForward()} onPress={forward} />
+        <IconButton name="chevronRight" label={t("nav.goForward")} short={t("nav.forward")} disabled={!canForward()} onPress={forward} />
       </If>
     </>
   );
@@ -165,7 +166,7 @@ export function PageHeader(props: { title: string; showTitle?: boolean; shown?: 
           stop of Tab, Left and Right between its buttons. */}
       <Region.Provider value={{ name: "header", when: props.shown }}>
       <Toolbar
-        accessibilityLabel="Header"
+        accessibilityLabel={t("nav.header")}
         class={
           terminal
             ? "items-center gap-1"
@@ -185,7 +186,7 @@ export function PageHeader(props: { title: string; showTitle?: boolean; shown?: 
             there is no title bar of the app's own (Linux keeps the
             system's, which a tiling desktop does not draw). */}
         <If when={desktop() && !terminal && hasAppWindow}>
-          <IconButton name="close" label="Close window" hint onPress={closeMainWindow} />
+          <IconButton name="close" label={t("nav.closeWindow")} hint onPress={closeMainWindow} />
         </If>
       </Toolbar>
       </Region.Provider>

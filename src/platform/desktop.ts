@@ -33,7 +33,7 @@ export interface DesktopShellOptions {
   /** Opens the Now Playing view; shown in the tray menu when given. */
   showNowPlaying?(): void;
   /** Closing the main window hides it (true, the default) or quits. */
-  hideOnClose?: boolean;
+  hideOnClose?: boolean | (() => boolean);
 }
 
 /** What the desktop shell installed: show the main window from elsewhere
@@ -118,16 +118,19 @@ export function installDesktopShell(opts: DesktopShellOptions): DesktopShell {
   // focus the main window instead of letting the app stay minimized/hidden.
   cleanup(Application.on("reopen", showWindow));
 
-  if (opts.hideOnClose !== false) {
-    win.set({ closeOnPress: false });
-    hidesOnClose = true;
-    const stop = win.on("closePress", () => win.hide());
-    cleanup(() => {
-      hidesOnClose = false;
-      stop();
-      win.set({ closeOnPress: true });
-    });
-  }
+  const stopClose = win.on("closePress", () => {
+    if (hidesOnClose) win.hide();
+  });
+  effect(() => {
+    const hide = typeof opts.hideOnClose === "function" ? opts.hideOnClose() : opts.hideOnClose !== false;
+    hidesOnClose = hide;
+    win.set({ closeOnPress: !hide });
+  });
+  cleanup(() => {
+    hidesOnClose = false;
+    stopClose();
+    win.set({ closeOnPress: true });
+  });
 
   // The tray follows the player and the theme (its ink is the foreground
   // token, so it reads on the panel in either appearance).

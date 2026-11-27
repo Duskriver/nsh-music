@@ -10,10 +10,15 @@
 // Rust (`SystemTheme`, src/theme.rs) finds, reads and watches the palette;
 // the mapping onto tokens is ./palette.ts.
 
-import { cleanup, setColorScheme, setTheme, token, type Theme } from "nsh";
+import { cleanup, setColorScheme, setTheme, signal, token, type Theme } from "nsh";
 import { SystemTheme } from "nsh-music/native";
 
 import { mapPalette, type SystemPalette } from "./palette";
+
+const systemThemeActive = signal(false);
+
+/** Whether an Omarchy system theme currently overrides `theme.json` and the color scheme (tracked). */
+export const usingSystemTheme = () => systemThemeActive();
 
 /** The non-color tokens of theme.json, kept as they are: `setTheme`
  * replaces the whole theme. Add a token here when theme.json gains one that
@@ -66,6 +71,7 @@ export function followSystemTheme(): boolean {
     return false;
   }
   if (!system.available) {
+    systemThemeActive.set(false);
     system.dispose();
     return false;
   }
@@ -78,11 +84,13 @@ export function followSystemTheme(): boolean {
       if (theme && palette) {
         setTheme(theme);
         setColorScheme(palette.mode);
+        systemThemeActive.set(true);
         applied = true;
       } else if (applied) {
         // The theme went (or cannot be read): back to theme.json.
         setTheme(null);
         setColorScheme("system");
+        systemThemeActive.set(false);
         applied = false;
       }
     } catch (error) {
@@ -97,6 +105,7 @@ export function followSystemTheme(): boolean {
   cleanup(() => {
     stop();
     system.dispose();
+    systemThemeActive.set(false);
     if (applied) {
       setTheme(null);
       setColorScheme("system");

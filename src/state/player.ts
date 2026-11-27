@@ -336,24 +336,17 @@ function restoreSetting<T extends string>(key: string, valid: readonly T[], curr
 
 restoreSetting(PLAY_MODE_KEY, VALID_PLAY_MODES, () => backend.player().playMode, (mode) => backend.setPlayMode(mode));
 
-/** Cycles the playback mode: Repeat all -> Repeat one -> Shuffle -> Repeat all. */
-export function cyclePlayMode(): void {
-  const playMode = NEXT_PLAY_MODE[player().playMode];
-  Storage.setItem(PLAY_MODE_KEY, playMode).catch(() => {});
-  send({ playMode }, () => backend.setPlayMode(playMode));
-}
-
-const QUALITY_KEY = "player:quality";
-const VALID_QUALITIES: AudioQuality[] = ["standard", "exhigh", "lossless", "hires"];
-restoreSetting(QUALITY_KEY, VALID_QUALITIES, () => backend.player().quality, (quality) => backend.setQuality(quality));
-
-/** Switches the preferred audio streaming quality and remembers it. */
-export function setQuality(quality: AudioQuality): void {
+function persistSetting<K extends keyof PlayerState>(
+  change: Pick<PlayerState, K>,
+  storageKey: string,
+  value: string,
+  action: () => Promise<void>,
+): void {
   if (!ready()) return;
-  const entry: Pending = { change: { quality }, started: Date.now(), settled: null };
+  const entry: Pending = { change, started: Date.now(), settled: null };
   pending.update((list) => [...list, entry]);
-  Storage.setItem(QUALITY_KEY, quality).catch(() => {});
-  backend.setQuality(quality).then(
+  Storage.setItem(storageKey, value).catch(() => {});
+  action().then(
     () => {
       entry.settled = Date.now();
       setTimeout(prune, SETTLE_GRACE + 50);
@@ -364,6 +357,27 @@ export function setQuality(quality: AudioQuality): void {
       report("playFailed", error);
     },
   );
+}
+
+/** Cycles the playback mode: Repeat all -> Repeat one -> Shuffle -> Repeat all. */
+export function cyclePlayMode(): void {
+  const playMode = NEXT_PLAY_MODE[player().playMode];
+  Storage.setItem(PLAY_MODE_KEY, playMode).catch(() => {});
+  send({ playMode }, () => backend.setPlayMode(playMode));
+}
+
+/** Sets the playback mode directly and remembers it. */
+export function setPlayMode(playMode: PlayMode): void {
+  persistSetting({ playMode }, PLAY_MODE_KEY, playMode, () => backend.setPlayMode(playMode));
+}
+
+const QUALITY_KEY = "player:quality";
+const VALID_QUALITIES: AudioQuality[] = ["standard", "exhigh", "lossless", "hires"];
+restoreSetting(QUALITY_KEY, VALID_QUALITIES, () => backend.player().quality, (quality) => backend.setQuality(quality));
+
+/** Switches the preferred audio streaming quality and remembers it. */
+export function setQuality(quality: AudioQuality): void {
+  persistSetting({ quality }, QUALITY_KEY, quality, () => backend.setQuality(quality));
 }
 
 export function toggleLike(): void {

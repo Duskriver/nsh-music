@@ -6,6 +6,7 @@
 
 import { platform, Text, View } from "nsh";
 import { Tab, Tabs } from "nsh/base";
+import { t } from "../i18n";
 import { BackHandler, isAvailable as mobile, TabBar } from "nsh/mobile";
 import { Sidebar } from "../components/library/sidebar";
 import { MiniPlayer } from "../components/player/player-bar";
@@ -18,10 +19,10 @@ import { MainStack } from "./main";
 
 type TabId = "home" | "liked" | "library";
 
-const TABS: { id: TabId; label: string; icon: IconName; symbol: string }[] = [
-  { id: "library", label: "Library", icon: "library", symbol: "books.vertical" },
-  { id: "home", label: "Explore", icon: "compass", symbol: "safari" },
-  { id: "liked", label: "Liked", icon: "heart", symbol: "heart" },
+const tabs = (): { id: TabId; label: string; icon: IconName; symbol: string }[] => [
+  { id: "library", label: t("nav.library"), icon: "library", symbol: "books.vertical" },
+  { id: "home", label: t("nav.explore"), icon: "compass", symbol: "safari" },
+  { id: "liked", label: t("nav.liked"), icon: "heart", symbol: "heart" },
 ];
 
 /** The tab that shows now (tracked). */
@@ -43,7 +44,7 @@ function choose(id: TabId) {
 function AppTabs() {
   return (
     <Tabs class="flex-row items-stretch border-t border-border bg-player px-2 pt-1 pb-[env(safe-area-inset-bottom)]">
-      <Each of={TABS} key={(t) => t.id}>
+      <Each of={tabs()} key={(tab) => tab.id}>
         {(tab) => (
           <Tab
             selected={selectedTab() === tab().id}
@@ -83,9 +84,9 @@ export function PhoneShell() {
         else={<AppTabs />}
       >
         <TabBar
-          items={TABS.map((t) => ({ title: t.label, icon: platform.select({ ios: t.symbol }) ?? null }))}
-          selectedIndex={TABS.findIndex((t) => t.id === selectedTab())}
-          onChange={({ index }) => choose(TABS[index].id)}
+          items={tabs().map((tab) => ({ title: tab.label, icon: platform.select({ ios: tab.symbol }) ?? null }))}
+          selectedIndex={tabs().findIndex((tab) => tab.id === selectedTab())}
+          onChange={({ index }) => choose(tabs()[index].id)}
         />
       </If>
       <AppSheet open={drawerOpen()} onOpenChange={setDrawerOpen} side="left" testID="drawer">

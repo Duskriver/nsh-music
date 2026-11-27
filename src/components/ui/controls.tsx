@@ -6,7 +6,8 @@
 
 import { type AnimatedValue, effect, Image, platform, type MotionSpec, reduceMotion, signal, Text, token, untracked, View } from "nsh";
 import type { JSX, ViewProps } from "nsh";
-import { Button, Slider, Tooltip } from "nsh/base";
+import { Button, Radio, RadioGroup, Slider, Switch, Tooltip } from "nsh/base";
+import { t } from "../../i18n";
 import { alpha, tint } from "../../state/tint";
 import { Icon, type IconColor, iconMotion, type IconName, SwapIcon } from "./icons";
 import { lazyMotion } from "./motion";
@@ -212,7 +213,7 @@ export function PlayButton(props: {
   onPress: () => void;
 }) {
   const size = () => props.size ?? 36;
-  const label = () => (props.playing ? "Pause" : "Play");
+  const label = () => (props.playing ? t("player.pause") : t("player.play"));
   if (terminal) {
     return (
       <Button accessibilityLabel={label()} disabled={props.disabled ?? false} onPress={props.onPress} class="px-1 focus:bg-muted disabled:opacity-50">
@@ -448,5 +449,156 @@ export function SectionTitle(props: { children: JSX.Element; class?: string }) {
     <Text role="header" class={`text-xl font-bold text-foreground ${props.class ?? ""}`}>
       {props.children}
     </Text>
+  );
+}
+
+/** A toggle switch for immediate preferences in Settings. */
+export function SettingSwitch(props: {
+  checked: boolean;
+  label: string;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  if (terminal) {
+    return (
+      <Switch
+        checked={props.checked}
+        disabled={props.disabled ?? false}
+        accessibilityLabel={props.label}
+        onChange={(e) => props.onChange(e.checked)}
+        class="focus:bg-muted"
+      />
+    );
+  }
+  return (
+    <Switch
+      checked={props.checked}
+      disabled={props.disabled ?? false}
+      accessibilityLabel={props.label}
+      hitSlop={6}
+      onChange={(e) => props.onChange(e.checked)}
+      class={`rounded-full disabled:opacity-40 ${focusRing}`}
+      trackClass={`h-6 w-11 rounded-full bg-muted p-0.5 transition-colors ${DURATION_CLASS.fast} ${EASE_CLASS.out} checked:bg-foreground motion-reduce:transition-none`}
+      thumbClass={`size-5 rounded-full bg-muted-foreground shadow-sm transition-transform ${DURATION_CLASS.fast} ${EASE_CLASS.smoothOut} checked:translate-x-5 checked:bg-background motion-reduce:transition-none`}
+    />
+  );
+}
+
+/** A single-choice segmented control built on `RadioGroup` and `Radio`. */
+export function SegmentedControl<T extends string>(props: {
+  label: string;
+  value: T;
+  options: readonly { value: T; label: string; detail?: string }[];
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <RadioGroup
+      accessibilityLabel={props.label}
+      class={
+        terminal
+          ? "flex-row flex-wrap gap-2"
+          : "flex-row flex-wrap gap-1 rounded-(--radius-card) border border-border bg-secondary p-1"
+      }
+    >
+      <Each of={props.options} key={(opt) => opt.value}>
+        {(opt) => {
+          const checked = () => props.value === opt().value;
+          const a11y = () => (opt().detail ? `${opt().label} (${opt().detail})` : opt().label);
+          return (
+            <Radio
+              checked={checked()}
+              disabled={props.disabled ?? false}
+              accessibilityLabel={a11y()}
+              onChange={(e) => {
+                if (e.checked) props.onChange(opt().value);
+              }}
+              class={
+                terminal
+                  ? "px-1 focus:bg-muted"
+                  : `group min-h-8 flex-row items-center justify-center gap-1.5 rounded-(--radius-inset) px-3 py-1.5 ${PRESS} ${PRESSED} hover:bg-row-hover checked:bg-foreground disabled:opacity-40 ${focusRing}`
+              }
+            >
+              <Text
+                class={
+                  terminal
+                    ? checked()
+                      ? "font-bold text-primary"
+                      : "text-foreground"
+                    : "text-xs font-semibold text-muted-foreground group-hover:text-foreground group-checked:text-background"
+                }
+              >
+                {opt().label}
+              </Text>
+              <If when={opt().detail}>
+                {(detail) => (
+                  <Text
+                    class={
+                      terminal
+                        ? "text-muted-foreground"
+                        : "font-mono text-[11px] text-muted-foreground/80 group-checked:text-background/70"
+                    }
+                  >
+                    {detail()}
+                  </Text>
+                )}
+              </If>
+            </Radio>
+          );
+        }}
+      </Each>
+    </RadioGroup>
+  );
+}
+
+/** A titled group of settings rows in a grouped card surface. */
+export function SettingGroup(props: { title: string; style?: ViewProps["style"]; children: JSX.Element }) {
+  return (
+    <View class={terminal ? "gap-1" : "gap-2"} style={props.style}>
+      <Text role="header" class={terminal ? "font-bold text-muted-foreground" : "px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"}>
+        {props.title}
+      </Text>
+      <View class={terminal ? "gap-1 border border-border p-1" : "overflow-hidden rounded-(--radius-panel) border border-border bg-card"}>
+        {props.children}
+      </View>
+    </View>
+  );
+}
+
+/** One setting row with label, optional description, hairline divider, and control slot. */
+export function SettingRow(props: {
+  title: string;
+  description?: string;
+  stacked?: boolean;
+  first?: boolean;
+  children?: JSX.Element;
+}) {
+  return (
+    <View>
+      <If when={!props.first && !terminal}>
+        <View class="mx-4 h-px bg-border" />
+      </If>
+      <View
+        class={
+          terminal
+            ? props.stacked
+              ? "gap-1 py-0.5"
+              : "flex-row items-center justify-between gap-2 py-0.5"
+            : props.stacked
+              ? "gap-2.5 px-4 py-3.5"
+              : "flex-row items-center justify-between gap-4 px-4 py-3.5"
+        }
+      >
+        <View class="min-w-0 flex-1 gap-0.5">
+          <Text class="text-sm font-medium text-foreground">{props.title}</Text>
+          <If when={props.description}>
+            {(desc) => <Text class="text-xs text-muted-foreground">{desc()}</Text>}
+          </If>
+        </View>
+        <If when={props.children}>
+          {(content) => <View class="shrink-0">{content()}</View>}
+        </If>
+      </View>
+    </View>
   );
 }

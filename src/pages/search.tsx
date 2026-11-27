@@ -3,6 +3,7 @@
 
 import { effect, resource, Scroll, token, untracked, View } from "nsh";
 import { Input } from "nsh/base";
+import { t } from "../i18n";
 import type { SearchResults } from "../backend/types";
 import { AppPage } from "../components/page";
 import { pageEnd, wideTracks } from "../components/layout";
@@ -42,7 +43,7 @@ export function SearchPage() {
   const shown = () => (term() ? results()?.found : undefined);
 
   return (
-    <AppPage title="Search" testID="page-search" shown={() => currentRoute().name === "search"}>
+    <AppPage title={t("search.title")} testID="page-search" shown={() => currentRoute().name === "search"}>
       {/* On the desktop the field is in the header's top-right corner
           (`SearchField`); the phone and the terminal keep it here. */}
       <If when={layout() !== "desktop" || terminal}>
@@ -60,8 +61,8 @@ export function SearchPage() {
           <Input
             value={query()}
             onChange={({ value }) => query.set(value)}
-            placeholder="What do you want to play?"
-            accessibilityLabel="Search music"
+            placeholder={t("search.placeholder")}
+            accessibilityLabel={t("search.inputLabel")}
             returnKeyType="search"
             autoFocus={!terminal}
             class="flex-1 text-base text-foreground"
@@ -69,12 +70,12 @@ export function SearchPage() {
           />
         </View>
         <If when={busy() && !!term()}>
-          <Spinner label="Searching" />
+          <Spinner label={t("search.searching")} />
         </If>
       </View>
       </If>
       <Scroll class="flex-1" contentClass={pageEnd()}>
-        <If when={term()} else={<EmptyState title="Search music" detail="Find songs, artists, albums and playlists." />}>
+        <If when={term()} else={<EmptyState title={t("search.emptyTitle")} detail={t("search.emptyDetail")} />}>
           {/* Results come in with the skeleton's reveal when nothing showed
               before them, their songs in a wave; a new search then keeps
               them, with the spinner, and its own just take their place. */}
@@ -82,7 +83,7 @@ export function SearchPage() {
             data={shown()}
             placeholder={
               <If when={results.state() === "errored"} else={<SearchSkeleton />}>
-                <ErrorState message="Search didn't work." onRetry={results.refetch} />
+                <ErrorState message={t("search.error")} onRetry={results.refetch} />
               </If>
             }
           >
@@ -108,11 +109,11 @@ export function SearchPage() {
                 },
               });
               return (
-              <If when={!isEmpty(found())} else={<EmptyState title="No results" detail="Check the spelling, or try fewer words." />}>
+              <If when={!isEmpty(found())} else={<EmptyState title={t("search.noResultsTitle")} detail={t("search.noResultsDetail")} />}>
                 <View class={terminal ? "gap-1" : "gap-8"}>
                   <If when={found().tracks.length > 0}>
                     <View class="gap-2">
-                      <SectionTitle class="px-6">Songs</SectionTitle>
+                      <SectionTitle class="px-6">{t("search.songs")}</SectionTitle>
                       <TrackHeader showAlbum={wideTracks()} />
                       <View ref={songs.ref} focusable={songs.focusable()} onFocus={songs.onFocus} onBlur={songs.onBlur}>
                       <Each of={found().tracks} key={(t) => t.uid || t.uri}>
@@ -132,13 +133,13 @@ export function SearchPage() {
                     </View>
                   </If>
                   <If when={found().artists.length > 0}>
-                    <CardRow title="Artists" items={found().artists} wave={wave} class="px-3" group={group} order={1} />
+                    <CardRow title={t("search.artists")} items={found().artists} wave={wave} class="px-3" group={group} order={1} />
                   </If>
                   <If when={found().albums.length > 0}>
-                    <CardRow title="Albums" items={found().albums} wave={wave} delay={120} class="px-3" group={group} order={2} />
+                    <CardRow title={t("search.albums")} items={found().albums} wave={wave} delay={120} class="px-3" group={group} order={2} />
                   </If>
                   <If when={found().playlists.length > 0}>
-                    <CardRow title="Playlists" items={found().playlists} wave={wave} delay={240} class="px-3" group={group} order={3} />
+                    <CardRow title={t("search.playlists")} items={found().playlists} wave={wave} delay={240} class="px-3" group={group} order={3} />
                   </If>
                 </View>
               </If>

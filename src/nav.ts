@@ -9,12 +9,13 @@ import { batch, effect, signal, untracked } from "nsh";
 import { createNavStack } from "nsh/base";
 
 /** A page of the main content. */
-export type Route = { name: "home" } | { name: "search" } | { name: "collection"; uri: string };
+export type Route = { name: "home" } | { name: "search" } | { name: "collection"; uri: string } | { name: "settings" };
 
 /** The root routes: the same objects every time, so a stack that keeps one
  * keeps its page. */
 export const HOME: Route = { name: "home" };
 export const SEARCH: Route = { name: "search" };
+export const SETTINGS: Route = { name: "settings" };
 /** Liked Songs as a root: the phone's tab. */
 export const LIKED: Route = { name: "collection", uri: "netease:collection:tracks" };
 

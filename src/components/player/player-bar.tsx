@@ -3,6 +3,7 @@
 
 import { effect, Text, token, View, windowSize } from "nsh";
 import { Button, Toolbar } from "nsh/base";
+import { t } from "../../i18n";
 import { openLyrics, setNowPlayingOpen } from "../../state/overlays";
 import { hasTrack, player, toggle } from "../../state/player";
 import { ready } from "../../state/session";
@@ -36,7 +37,7 @@ export function PlayerBar() {
     {/* One stop of Tab, Left and Right between its buttons (the position
         and the volume are stops of their own). */}
     <Region.Provider value={{ name: "player" }}>
-    <Toolbar accessibilityLabel="Player">
+    <Toolbar accessibilityLabel={t("player.toolbar")}>
     <PlayerGlass
       effect={lightEffect()}
       colors={colors()}
@@ -102,7 +103,7 @@ export function PlayerBar() {
           {/* The lyrics (in Now Playing); the volume always shows its slider
               here, balancing what plays on the left; the light's menu at the
               very end. */}
-          <IconButton name="microphone" label="Lyrics" hint disabled={!hasTrack()} onPress={openLyrics} />
+          <IconButton name="microphone" label={t("player.lyrics.label")} hint disabled={!hasTrack()} onPress={openLyrics} />
           <QualityMenu placement="top" />
           <VolumeControl quiet />
           <LightMenu placement="top" />
@@ -123,7 +124,7 @@ export function MiniPlayer() {
     <If when={hasTrack()}>
       <View class="mx-2 mb-2 h-14 flex-row items-center gap-3 rounded-(--radius-card) border border-border bg-secondary px-2">
         <Button
-          accessibilityLabel={`Open Now Playing: ${player().title}`}
+          accessibilityLabel={t("player.openNowPlaying", { title: player().title })}
           onPress={() => setNowPlayingOpen(true)}
           class={`min-w-0 flex-1 flex-row items-center gap-3 rounded-(--radius) active:opacity-70 ${focusRing}`}
         >

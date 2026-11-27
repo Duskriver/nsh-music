@@ -3,47 +3,54 @@
 // own focus, Escape and back.
 
 import { Image, keymap, Scroll, Text, View } from "nsh";
+import { type NoParamTranslationKey, t } from "../i18n";
 import { ActionButton, IconButton, terminal, TextLink } from "../components/ui/controls";
 import { AppDialog, AppSheet } from "../components/ui/overlays";
 import { NSH_URL, openExternal, REPO_URL } from "../state/links";
 import { aboutOpen, finishFirstRun, firstRunOpen, setAboutOpen, setShortcutsOpen, shortcutsOpen } from "../state/overlays";
-import { REGION_KEYS } from "../components/ui/regions";
+import { REGION_KEYS, type RegionName } from "../components/ui/regions";
 import { cancelSignIn, health, signedIn, signIn } from "../state/session";
 import { Logo } from "../ui/logo";
 
-const DISCLAIMER = "nsh-music is an unofficial client for NetEase Cloud Music.";
+const REGION_LABEL_KEY: Record<RegionName, NoParamTranslationKey> = {
+  sidebar: "dialogs.shortcuts.goToSidebar",
+  main: "dialogs.shortcuts.goToPage",
+  header: "dialogs.shortcuts.goToHeader",
+  player: "dialogs.shortcuts.goToPlayer",
+};
 
 /** The keyboard, as the help lists it: what each key does, by section.
  * Several keystrokes in one row are alternatives (shown joined by "/"). */
-const SHORTCUTS: { title: string; rows: { keys: string[]; label: string }[] }[] = [
+const SHORTCUTS: { titleKey: NoParamTranslationKey; rows: { keys: string[]; labelKey: NoParamTranslationKey }[] }[] = [
   {
-    title: "Regions",
-    rows: REGION_KEYS.map((k) => ({ keys: [k.keystroke], label: `Go to the ${k.label.toLowerCase()}` })),
+    titleKey: "dialogs.shortcuts.sections.regions",
+    rows: REGION_KEYS.map((k) => ({ keys: [k.keystroke], labelKey: REGION_LABEL_KEY[k.region] })),
   },
   {
-    title: "In a region",
+    titleKey: "dialogs.shortcuts.sections.inRegion",
     rows: [
-      { keys: ["up", "down", "left", "right"], label: "Move between items" },
-      { keys: ["home", "end"], label: "First and last item" },
-      { keys: ["pageup", "pagedown"], label: "Up and down a screen" },
-      { keys: ["enter"], label: "Play or open" },
-      { keys: ["tab", "shift+tab"], label: "Next and previous control" },
+      { keys: ["up", "down", "left", "right"], labelKey: "dialogs.shortcuts.moveBetweenItems" },
+      { keys: ["home", "end"], labelKey: "dialogs.shortcuts.firstAndLast" },
+      { keys: ["pageup", "pagedown"], labelKey: "dialogs.shortcuts.pageUpDown" },
+      { keys: ["enter"], labelKey: "dialogs.shortcuts.playOrOpen" },
+      { keys: ["tab", "shift+tab"], labelKey: "dialogs.shortcuts.nextPrevControl" },
     ],
   },
   {
-    title: "Playback",
+    titleKey: "dialogs.shortcuts.sections.playback",
     rows: [
-      { keys: ["space"], label: "Play and pause" },
-      { keys: ["mod+shift+right"], label: "Next track" },
-      { keys: ["mod+shift+left"], label: "Previous track" },
+      { keys: ["space"], labelKey: "dialogs.shortcuts.playAndPause" },
+      { keys: ["mod+shift+right"], labelKey: "dialogs.shortcuts.nextTrack" },
+      { keys: ["mod+shift+left"], labelKey: "dialogs.shortcuts.prevTrack" },
     ],
   },
   {
-    title: "Pages",
+    titleKey: "dialogs.shortcuts.sections.pages",
     rows: [
-      { keys: ["alt+left"], label: "Go back" },
-      { keys: ["escape"], label: "Close or go back" },
-      { keys: ["shift+/"], label: "Show these shortcuts" },
+      { keys: ["alt+left"], labelKey: "dialogs.shortcuts.goBack" },
+      { keys: ["escape"], labelKey: "dialogs.shortcuts.closeOrBack" },
+      { keys: ["mod+,"], labelKey: "dialogs.shortcuts.openSettings" },
+      { keys: ["shift+/"], labelKey: "dialogs.shortcuts.showShortcuts" },
     ],
   },
 ];
@@ -63,19 +70,19 @@ export function ShortcutsDialog() {
     <AppDialog open={shortcutsOpen()} onOpenChange={setShortcutsOpen} testID="shortcuts">
       <View class="flex-row items-center justify-between pl-6 pr-3 pt-3">
         <Text role="header" class="text-lg font-extrabold text-foreground">
-          Keyboard Shortcuts
+          {t("dialogs.shortcuts.title")}
         </Text>
-        <IconButton name="close" label="Close" onPress={() => setShortcutsOpen(false)} />
+        <IconButton name="close" label={t("account.close")} onPress={() => setShortcutsOpen(false)} />
       </View>
       <Scroll class="max-h-140" contentClass={terminal ? "gap-1" : "gap-5 px-6 pb-6 pt-3"}>
-        <Each of={SHORTCUTS} key={(s) => s.title}>
+        <Each of={SHORTCUTS} key={(s) => s.titleKey}>
           {(section) => (
             <View class="gap-2">
-              <Text class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{section().title}</Text>
-              <Each of={section().rows} key={(r) => r.label}>
+              <Text class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t(section().titleKey)}</Text>
+              <Each of={section().rows} key={(r) => r.labelKey}>
                 {(row) => (
                   <View class="min-h-7 flex-row items-center gap-4">
-                    <Text class="min-w-0 flex-1 text-sm text-foreground">{row().label}</Text>
+                    <Text class="min-w-0 flex-1 text-sm text-foreground">{t(row().labelKey)}</Text>
                     <View class="flex-row items-center gap-1">
                       <Each of={row().keys} key={(k) => k}>
                         {(k) => <KeyCap keystroke={k()} />}
@@ -97,7 +104,7 @@ export function AboutDialog() {
   return (
     <AppDialog open={aboutOpen()} onOpenChange={setAboutOpen} testID="about">
       <View class="flex-row items-center justify-end px-3 pt-3">
-        <IconButton name="close" label="Close" onPress={() => setAboutOpen(false)} />
+        <IconButton name="close" label={t("account.close")} onPress={() => setAboutOpen(false)} />
       </View>
       <Scroll class="max-h-140" contentClass={terminal ? "gap-1" : "gap-5 px-6 pb-6"}>
         <View class="flex-row items-center gap-3">
@@ -108,18 +115,18 @@ export function AboutDialog() {
             <Text role="header" class="text-xl font-extrabold text-foreground">
               nsh-music
             </Text>
-            <Text class="text-xs text-muted-foreground">A native NetEase Cloud Music player</Text>
+            <Text class="text-xs text-muted-foreground">{t("dialogs.about.subtitle")}</Text>
           </View>
         </View>
         <View class="gap-2" selectable={!terminal}>
-          <Text class="text-sm font-bold text-foreground">{DISCLAIMER}</Text>
+          <Text class="text-sm font-bold text-foreground">{t("dialogs.about.disclaimer")}</Text>
           <Text class="text-sm text-muted-foreground">
-            Music, lyrics and artwork belong to their respective rights holders.
+            {t("dialogs.about.rights")}
           </Text>
         </View>
         <View class="flex-row flex-wrap gap-x-4 gap-y-1">
-          <TextLink label="Built with NSH" onPress={() => openExternal(NSH_URL)} />
-          <TextLink label="Source on GitHub" onPress={() => openExternal(REPO_URL)} />
+          <TextLink label={t("dialogs.about.builtWithNsh")} onPress={() => openExternal(NSH_URL)} />
+          <TextLink label={t("dialogs.about.sourceOnGithub")} onPress={() => openExternal(REPO_URL)} />
         </View>
       </Scroll>
     </AppDialog>
@@ -141,7 +148,7 @@ export function SigningInDialog() {
     >
       <View class={terminal ? "gap-1" : "items-center gap-4 p-8"}>
         <Text role="header" class="text-xl font-bold text-foreground">
-          扫码登录网易云音乐
+          {t("dialogs.signingIn.title")}
         </Text>
         <If when={!terminal && !!h().qrImage}>
           <View class="items-center justify-center rounded-(--radius-card) border border-border bg-card p-2">
@@ -149,12 +156,12 @@ export function SigningInDialog() {
           </View>
         </If>
         <Text class="text-center text-sm text-muted-foreground">
-          {h().prompt || "请使用网易云音乐手机 App 扫码并在手机上确认登录"}
+          {h().prompt || t("dialogs.signingIn.prompt")}
         </Text>
         <If when={h().qrImage === ""}>
-          <ActionButton label="重新扫码" variant="primary" onPress={signIn} />
+          <ActionButton label={t("dialogs.signingIn.retry")} variant="primary" onPress={signIn} />
         </If>
-        <ActionButton label="Cancel" onPress={cancelSignIn} />
+        <ActionButton label={t("account.cancel")} onPress={cancelSignIn} />
       </View>
     </AppDialog>
   );
@@ -177,14 +184,14 @@ export function FirstRunSheet() {
             <Logo size={44} />
           </If>
           <Text role="header" class="text-xl font-extrabold text-foreground">
-            Welcome to nsh-music
+            {t("dialogs.firstRun.welcome")}
           </Text>
         </View>
-        <Text class="text-sm text-foreground">{DISCLAIMER}</Text>
+        <Text class="text-sm text-foreground">{t("dialogs.about.disclaimer")}</Text>
         <View class="flex-row flex-wrap items-center gap-3">
           <If when={signedIn() !== true}>
             <ActionButton
-              label="Log in"
+              label={t("account.logIn")}
               variant="primary"
               onPress={() => {
                 finishFirstRun();
@@ -192,9 +199,9 @@ export function FirstRunSheet() {
               }}
             />
           </If>
-          <ActionButton label={signedIn() === true ? "Start listening" : "Not now"} onPress={finishFirstRun} />
+          <ActionButton label={signedIn() === true ? t("dialogs.firstRun.startListening") : t("dialogs.firstRun.notNow")} onPress={finishFirstRun} />
         </View>
-        <TextLink label="Built with NSH" onPress={() => openExternal(NSH_URL)} />
+        <TextLink label={t("dialogs.about.builtWithNsh")} onPress={() => openExternal(NSH_URL)} />
       </View>
     </AppSheet>
   );

@@ -4,6 +4,7 @@
 import { type AnimatedValue, cleanup, createAnimatedValue, createMotion, effect, Overlay, reduceMotion, safeArea, signal, Text, untracked, View, windowSize } from "nsh";
 import type { JSX } from "nsh";
 import { Button, Toast, type ToastEntry, ToastStack } from "nsh/base";
+import { t } from "../../i18n";
 import { choose, dismiss, dismissNewest, setToastsExpanded, toastContent, toasts } from "../../state/feedback";
 import { ActionButton, focusRing, terminal } from "./controls";
 import { REVEAL_IN, REVEAL_OUT, SKELETON_PULSE } from "./motion";
@@ -96,7 +97,7 @@ export function ErrorState(props: { message: string; detail?: string; actionLabe
       <If when={props.detail}>
         <Text class="max-w-md text-center text-sm text-muted-foreground">{props.detail}</Text>
       </If>
-      <ActionButton label={props.actionLabel ?? "Retry"} onPress={props.onRetry} />
+      <ActionButton label={props.actionLabel ?? t("account.retry")} onPress={props.onRetry} />
     </View>
   );
 }

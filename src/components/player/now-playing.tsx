@@ -4,6 +4,7 @@
 // beside it (wide).
 
 import { cleanup, createMotion, effect, View, windowSize } from "nsh";
+import { t } from "../../i18n";
 import { coverColorsQuery } from "../../data/queries";
 import { lyricsShown, nowPlayingOpen, setLyricsShown, setNowPlayingOpen } from "../../state/overlays";
 import { player } from "../../state/player";
@@ -110,14 +111,14 @@ function NowPlayingContent() {
         desktop={{ windowDrag: true }}
         style={{ paddingTop: titleBarArea().height > 0 ? titleBarArea().height : 16 }}
       >
-        <IconButton name="chevronDown" label="Close Now Playing" short="Back" size={24} onPress={() => setNowPlayingOpen(false)} />
+        <IconButton name="chevronDown" label={t("player.closeNowPlaying")} short={t("nav.back")} size={24} onPress={() => setNowPlayingOpen(false)} />
         {/* The corner: the lyrics, the volume (always open here, nothing to
             reveal) and the light. */}
         <View class="flex-row items-center gap-1">
           <IconButton
             name="microphone"
-            label={lyricsShown() ? "Hide lyrics" : "Show lyrics"}
-            short="Lyrics"
+            label={lyricsShown() ? t("player.lyrics.hide") : t("player.lyrics.show")}
+            short={t("player.lyrics.label")}
             size={22}
             pressed={lyricsShown()}
             tinted

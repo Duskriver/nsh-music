@@ -18,11 +18,13 @@ import { installDesktopShell } from "./src/platform/desktop";
 import { installMediaControls } from "./src/platform/media";
 import { followSystemTheme } from "./src/platform/theme";
 import { checkForUpdates } from "./src/platform/updater";
+import { open, SETTINGS } from "./src/nav";
 import { positionAt } from "./src/backend/types";
 import { isDemo } from "./src/state/engine";
 import { announce } from "./src/state/feedback";
 import { setNowPlayingOpen, setShortcutsOpen } from "./src/state/overlays";
 import { next, pause, play, player, previous, seek, toggle } from "./src/state/player";
+import { hideOnClose } from "./src/state/settings";
 
 /** How often a long-running app looks for updates again. */
 const UPDATE_EVERY = 6 * 60 * 60 * 1000;
@@ -41,6 +43,7 @@ function installPlatform() {
     next,
     previous,
     showNowPlaying: () => setNowPlayingOpen(true),
+    hideOnClose,
   });
   installMediaControls({
     // The position where it is now, so the system's own clock runs on from it.
@@ -75,6 +78,7 @@ function Shortcuts() {
   // Ctrl and an arrow move between the window's regions; `?` lists the keys.
   bindRegionKeys();
   keymap.bind("shift+/", () => setShortcutsOpen(true), { when: "notEditing" });
+  keymap.bind("mod+,", () => open(SETTINGS), { when: "notEditing" });
   return <View class="hidden" />;
 }
 

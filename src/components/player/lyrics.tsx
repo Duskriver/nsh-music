@@ -5,6 +5,7 @@
 
 import { cleanup, effect, List, type ListRef, reduceMotion, signal, Text, untracked, View } from "nsh";
 import { Button } from "nsh/base";
+import { t } from "../../i18n";
 import { lineAt, type Lyrics, positionAt } from "../../backend/types";
 import { lyricsQuery } from "../../data/queries";
 import { controlsEnabled, player, seek } from "../../state/player";
@@ -74,7 +75,7 @@ export function LyricsView(props: { large?: boolean; cover?: boolean }) {
   const failed = () => lyrics() === undefined && query.state() === "errored";
   return (
     <View class="min-h-0 flex-1" testID="lyrics">
-      <If when={track()} else={<NoLyrics text="Lyrics show here while a song plays." cover={props.cover} />}>
+      <If when={track()} else={<NoLyrics text={t("player.lyrics.idle")} cover={props.cover} />}>
         <If
           when={lyrics()}
           else={
@@ -82,18 +83,18 @@ export function LyricsView(props: { large?: boolean; cover?: boolean }) {
               when={failed()}
               else={
                 <View class="flex-1 items-center justify-center">
-                  <Spinner label="Loading lyrics" />
+                  <Spinner label={t("player.lyrics.loading")} />
                 </View>
               }
             >
               <View class="flex-1 justify-center">
-                <ErrorState message="The lyrics didn't load." onRetry={query.refetch} />
+                <ErrorState message={t("player.lyrics.error")} onRetry={query.refetch} />
               </View>
             </If>
           }
         >
           {(l) => (
-            <If when={l().lines.length > 0} else={<NoLyrics text="No lyrics for this song." cover={props.cover} />}>
+            <If when={l().lines.length > 0} else={<NoLyrics text={t("player.lyrics.empty")} cover={props.cover} />}>
               <LyricLines lyrics={l()} large={props.large} />
             </If>
           )}
@@ -177,7 +178,7 @@ function LyricLines(props: { lyrics: Lyrics; large?: boolean }) {
       footer={() => (
         <View class="gap-2 px-3 pb-40 pt-8">
           <If when={props.lyrics.provider}>
-            <Text class="text-xs text-muted-foreground">{`Lyrics provided by ${props.lyrics.provider}`}</Text>
+            <Text class="text-xs text-muted-foreground">{t("player.lyrics.providedBy", { provider: props.lyrics.provider })}</Text>
           </If>
         </View>
       )}

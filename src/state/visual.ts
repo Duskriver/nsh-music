@@ -3,7 +3,8 @@
 // another effect for each track that starts (never the one just shown).
 
 import { effect, signal, Storage, untracked } from "nsh";
-import { EFFECT_NAMES, TOOLBAR_EFFECTS, type ToolbarEffect } from "../components/ui/toolbar-fx";
+import { t } from "../i18n";
+import { TOOLBAR_EFFECTS, type ToolbarEffect } from "../components/ui/toolbar-fx";
 import { player } from "./player";
 
 /** What the menu offers: an effect, or a different one each track. */
@@ -48,8 +49,14 @@ export const lightEffect = () => shown();
 /** Whether Random is chosen (tracked). */
 export const lightRandom = () => chosen() === "random";
 
+/** Localized display name of a music light effect (tracked by current locale). */
+export const effectLabel = (effect: ToolbarEffect) => t(`player.light.effects.${effect}`);
+
 /** Its name, for the switch's label (tracked): Random says which it picked. */
-export const lightName = () => (lightRandom() ? `Random (${EFFECT_NAMES[shown()]})` : EFFECT_NAMES[shown()]);
+export const lightName = () =>
+  lightRandom()
+    ? t("player.light.randomActive", { name: effectLabel(shown()) })
+    : effectLabel(shown());
 
 /** Uses `choice` from now on (Random picks one at once), and remembers it. */
 export function setLight(choice: LightChoice): void {

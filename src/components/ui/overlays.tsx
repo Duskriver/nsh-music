@@ -3,11 +3,28 @@
 // caller owns `open` and follows `onOpenChange`.
 
 import { createMotion, type JSX, type MotionSpec, View } from "nsh";
-import { Dialog, Sheet } from "nsh/base";
+import { AlertDialog, Dialog, Sheet } from "nsh/base";
+import { t } from "../../i18n";
+import { signOut } from "../../state/session";
 import { terminal } from "./controls";
 import { enter } from "./motion";
 import { TitleBar } from "./title-bar";
 import { SPRING } from "./tokens";
+
+/** Logs out once the user confirms: the account goes with the music, and
+ * listening again requires signing in. */
+export async function confirmSignOut(): Promise<void> {
+  const { action } = await AlertDialog.show({
+    title: t("account.logOutConfirmTitle"),
+    description: t("account.logOutConfirmBody"),
+    actions: [
+      { id: "cancel", label: t("account.cancel"), role: "cancel" },
+      { id: "logOut", label: t("account.logOut"), role: "destructive" },
+    ],
+    closeOnEscape: true,
+  });
+  if (action === "logOut") await signOut();
+}
 
 /** A dialog's entrance: up a little from slightly smaller, settling on a
  * crisp physical spring as the scrim fades. */

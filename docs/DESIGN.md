@@ -286,7 +286,7 @@ sidebar less the panel's 8 + 1 each side), so it lines up edge to edge.
 - Rows: an icon centred in a 32pt slot (under the avatar's centre, labels
   under the name), the label, and ↗ for a page that opens in the browser, or
   a check for a setting.
-- Order: About…, GitHub ↗, NSH ↗, FPS, then Exit. The terminal places Log out
+- Order: Settings, About…, GitHub ↗, NSH ↗, FPS, then Exit. The terminal places Log out
   before Exit.
 
 ### Cards
@@ -325,6 +325,21 @@ the numbers, a TITLE (and ALBUM) overline starting at the covers' edge, and a
 (overline), name, an optional description and a details line, then a 44pt
 play button (48 on phones). The cover is centred over the rows' covers (the
 header starts 30pt in). Phones stack it, centred, the cover up to 160 wide.
+
+### Settings
+
+`src/pages/settings.tsx`: opened from the Account menu or `mod+,`, `max-w-2xl`
+centred in the page, grouped into `bg-card` / `border` / `--radius-panel`
+cards with hairline separators (`SettingGroup`, `SettingRow`) and controls from
+`src/components/ui/controls.tsx` (`SettingSwitch`, `SegmentedControl`,
+`ActionButton`, and the music light `Menu`).
+
+Motion inventory:
+- Page arrival / dismissal: cross-fade (`switchTo`) or stack slide (`open`), `base`.
+- Sections: staggered `fadeInUp` (55ms per group), disabled under reduced motion.
+- Switches: track color transition `fast` ease-out, thumb translation `fast` `SMOOTH_OUT`; instant under reduced motion.
+- Segmented options: hover wash (`instant` ease-out), press scale `0.97` (`SPRING.press`), checked `foreground` fill; instant under reduced motion.
+- Music light menu: popup morph (`SPRING.pop` in, `SPRING.exit` out); instant under reduced motion.
 
 ### Buttons
 
@@ -429,11 +444,11 @@ cover, title, artist, a 36pt play button. It opens Now Playing.
 
 ### Icons
 
-`src/components/ui/icons.tsx`: [Tabler Icons](https://tabler.io/icons) 3.19
-(MIT). Outline at a 1.5pt stroke; Filled for the transport (play, pause,
-skip) and the heart. One family; a missing glyph comes from Tabler, never
-drawn by hand. Drawn as SVG in a token's colour, redrawn when the appearance
-changes. Sizes: 18 in controls, 22 for sidebar nav and Now Playing, 24 for
+`src/components/ui/icons.tsx`: [Tabler Icons](https://tabler.io/icons) from
+nsh-icon's `nsh-icon-tabler` (MIT). Outline at a 1.5pt stroke; Filled for the
+transport (play, pause, skip) and the heart. One family; a missing glyph comes
+from Tabler, never drawn by hand or as a character. Drawn by nsh-icon's `Icon`
+in a token's text colour. Sizes: 18 in controls, 22 for sidebar nav and Now Playing, 24 for
 phone tabs, 16 in menus, 12–14 for marks (check, ↗, chevron).
 
 The playing mark (`src/components/ui/playing.tsx`) is three bars drawn by a

@@ -2,6 +2,8 @@
 // the steps a user takes: navigation, playback, signing out,
 // the phone's drawer and the keyboard.
 import { expect, open, test } from "nsh/test";
+import { collection } from "../src/backend/fixtures";
+import { sortTracks } from "../src/components/library/track-sort";
 
 /** What a launch after the first one has in its storage. */
 const LAUNCHED = { "firstRun:done": "1" };
@@ -361,4 +363,154 @@ test("play mode cycles between Repeat all, Repeat one and Shuffle and persists",
   // Reopening with saved storage restores the selected play mode.
   const reopened = await desktop({}, { ...LAUNCHED, "player:playMode": "shuffle" });
   await reopened.waitFor("id:player >> role:button[Play mode: Shuffle]");
+});
+
+test("a playlist's tracks can be sorted by date added, newest first", async () => {
+  const uri = "netease:playlist:morningstatic";
+  const tracks = collection(uri)?.tracks ?? [];
+  expect(tracks.length).toBeGreaterThan(2);
+  const first = tracks[0];
+  const newest = sortTracks(tracks, "added")[0];
+  // The demo's dates are shuffled against the playlist's order.
+  expect(newest.uri).not.toBe(first.uri);
+
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Morning Static]");
+  await app.waitFor(`role:button[${first.name}, ${first.artists}]`);
+  const before = app.texts();
+  expect(before.indexOf(first.name)).toBeLessThan(before.indexOf(newest.name));
+
+  await app.press("role:button[Sort tracks: Custom order]");
+  await app.waitFor("role:menuitemcheckbox[Recently added]");
+  await app.press("role:menuitemcheckbox[Recently added]");
+  await app.waitFor("role:button[Sort tracks: Recently added, descending]");
+  const after = app.texts();
+  expect(after.indexOf(newest.name)).toBeLessThan(after.indexOf(first.name));
+});
+
+test("a playlist can be sorted by title and shown compact", async () => {
+  const tracks = collection("netease:playlist:morningstatic")?.tracks ?? [];
+  const alphabetical = sortTracks(tracks, "title");
+  expect(alphabetical[0].uri).not.toBe(tracks[0].uri);
+
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Morning Static]");
+  await app.waitFor(`role:button[${tracks[0].name}, ${tracks[0].artists}]`);
+
+  await app.press("role:button[Sort tracks: Custom order]");
+  await app.press("role:menuitemcheckbox[Title]");
+  await app.waitFor("role:button[Sort tracks: Title, ascending]");
+  const texts = app.texts();
+  expect(texts.indexOf(alphabetical[0].name)).toBeLessThan(texts.indexOf(tracks[0].name));
+
+  // Compact keeps every row, with the sort kept.
+  await app.press("role:button[Sort tracks: Title, ascending]");
+  await app.press("role:menuitemcheckbox[Compact]");
+  await app.waitFor(`role:button[${alphabetical[0].name}, ${alphabetical[0].artists}]`);
+  expect(app.shows("role:button[Sort tracks: Title, ascending]")).toBe(true);
+});
+
+test("choosing the sort in use again runs it the other way", async () => {
+  const tracks = collection("netease:playlist:morningstatic")?.tracks ?? [];
+  const up = sortTracks(tracks, "title");
+  const down = sortTracks(tracks, "title", true);
+  expect(down[0].uri).not.toBe(up[0].uri);
+
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+  await app.press("role:button[Morning Static]");
+  await app.waitFor(`role:button[${tracks[0].name}, ${tracks[0].artists}]`);
+
+  await app.press("role:button[Sort tracks: Custom order]");
+  await app.press("role:menuitemcheckbox[Title]");
+  await app.waitFor("role:button[Sort tracks: Title, ascending]");
+  const first = app.texts();
+  expect(first.indexOf(up[0].name)).toBeLessThan(first.indexOf(down[0].name));
+
+  await app.press("role:button[Sort tracks: Title, ascending]");
+  // The entry in use carries its direction.
+  await app.press("role:menuitemcheckbox[Title, ascending]");
+  await app.waitFor("role:button[Sort tracks: Title, descending]");
+  const second = app.texts();
+  expect(second.indexOf(down[0].name)).toBeLessThan(second.indexOf(up[0].name));
+});
+
+test("settings opens from the user menu and shortcut, and updates preferences", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+
+  // Open Settings from the account menu.
+  await app.press("role:button[User menu: Ada]");
+  await app.press("role:menuitem[Settings]");
+  await app.waitFor("id:page-settings");
+  expect(app.shows("role:header[Settings]")).toBe(true);
+
+  // Audio quality & play mode sync with the player bar and persist.
+  await app.press("role:radio[Lossless (FLAC)]");
+  await app.waitFor("id:player >> role:button[Audio quality: Lossless]");
+  expect(app.storage()["player:quality"]).toBe("lossless");
+
+  await app.press("role:radio[Shuffle]");
+  await app.waitFor("id:player >> role:button[Play mode: Shuffle]");
+  expect(app.storage()["player:playMode"]).toBe("shuffle");
+
+  // Appearance, lyrics default, and playlist density persist.
+  await app.press("role:switch[Show lyrics by default]");
+  await app.waitUntil(() => app.storage()["lyrics:shown"] === "1");
+
+  await app.press("role:radio[Light]");
+  await app.waitUntil(() => app.storage()["ui:appearance"] === "light");
+
+  await app.press("role:radio[Compact]");
+  await app.waitUntil(() => app.storage()["ui:trackView"] === "compact");
+
+  // Clear cache empties locally cached pages.
+  await app.waitFor("role:button[Clear cache]");
+  expect(app.enabled("role:button[Clear cache]")).toBe(true);
+  await app.press("role:button[Clear cache]");
+  await app.waitFor("Cache is empty.");
+  expect(app.enabled("role:button[Clear cache]")).toBe(false);
+
+  // Go back returns to Home; mod+, opens Settings again.
+  await app.press("role:button[Go back]");
+  await app.waitFor("Good evening, Ada");
+  await app.keyboard.press("mod+,");
+  await app.waitFor("id:page-settings");
+});
+
+test("language switches between Chinese and English and persists", async () => {
+  const app = await desktop();
+  await app.waitFor("Good evening, Ada");
+
+  await app.keyboard.press("mod+,");
+  await app.waitFor("id:page-settings");
+
+  // Switching to Chinese updates Settings and the sidebar live.
+  await app.press("role:radio[简体中文]");
+  await app.waitFor("role:header[设置]");
+  expect(app.shows("role:header[播放]")).toBe(true);
+  expect(app.shows("role:header[外观]")).toBe(true);
+  expect(app.shows("首页")).toBe(true);
+  expect(app.storage()["ui:locale"]).toBe("zh-CN");
+
+  // Switching back to English restores English immediately.
+  await app.press("role:radio[English]");
+  await app.waitFor("role:header[Settings]");
+  expect(app.shows("role:header[PLAYBACK]")).toBe(true);
+  expect(app.storage()["ui:locale"]).toBe("en");
+
+  // Starting with system locale zh-CN picks locales/zh.yml automatically.
+  const zhApp = await open("../App.tsx", {
+    platform: "linux",
+    width: 1280,
+    height: 800,
+    locale: "zh-CN",
+    storage: LAUNCHED,
+    host: { params: { backend: "demo" } },
+  });
+  await zhApp.waitFor("首页");
+  await zhApp.press("role:button[用户菜单：Ada]");
+  await zhApp.waitFor("role:menuitem[设置]");
 });

@@ -4,15 +4,17 @@
 
 import { hasAppWindow, quitApp } from "../../platform/desktop";
 import { type AnimatedValue, createAnimatedValue, createMotion, effect, fpsEnabled, List, reduceMotion, setFpsEnabled, signal, Text, untracked, View } from "nsh";
-import { AlertDialog, Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
+import { Button, Menu, MenuItem, MenuSeparator } from "nsh/base";
+import { t } from "../../i18n";
 import type { Item } from "../../backend/types";
 import { libraryQuery, meQuery } from "../../data/queries";
-import { currentRoute, type Route, switchTo } from "../../nav";
+import { currentRoute, type Route, SETTINGS, switchTo } from "../../nav";
 import { NSH_URL, openExternal, REPO_URL } from "../../state/links";
 import { setAboutOpen, setDrawerOpen } from "../../state/overlays";
 import { isCurrentContext, isPlayingContext, player } from "../../state/player";
-import { signedIn, signIn, signOut } from "../../state/session";
+import { signedIn, signIn } from "../../state/session";
 import { ActionButton, Cover, focusRing, Hint, IconButton, keyRing, LAYER, menuItem, popupSurface, Pressable, terminal } from "../ui/controls";
+import { confirmSignOut } from "../ui/overlays";
 import { createListGroup, createListKeys, KEYS_VIEWABILITY, type ListGroup, type ListKeys } from "../ui/list-keys";
 import { ErrorState, LibrarySkeleton, Reveal } from "../ui/feedback";
 import { Icon, iconMotion, type IconName } from "../ui/icons";
@@ -21,7 +23,7 @@ import { createListWave, listItemEntrance, type ListWave, WAVE } from "../ui/mot
 import { DURATION, EASING, SPRING } from "../ui/tokens";
 import { menuPopupHidden, menuPopupLeaving, menuPopupStyle } from "../ui/menu";
 import { fallbackIcon } from "./cards";
-import { accountMenuWidth, layout } from "../layout";
+import { accountMenuWidth, layout, sidebarShown } from "../layout";
 
 /** Switches to a page from the sidebar, cross-fading rather than
  * sliding (and closes the phone's drawer). */
@@ -210,7 +212,7 @@ function LibraryPanel(props: { compact: boolean; group?: ListGroup }) {
     return library.data()?.items.findIndex((i) => i.uri === route.uri) ?? -1;
   };
   return (
-    <View accessibilityLabel="Your Library" class={terminal ? "min-h-0 flex-1" : "relative min-h-0 flex-1 overflow-hidden rounded-(--radius-panel) border border-border bg-card"}>
+    <View accessibilityLabel={t("nav.yourLibrary")} class={terminal ? "min-h-0 flex-1" : "relative min-h-0 flex-1 overflow-hidden rounded-(--radius-panel) border border-border bg-card"}>
       <If when={!terminal && signedIn() !== false}>
         {/* Behind the rows (the list's own top padding is 8pt). */}
         <SlidingSelection index={selectedIndex} top={8} scroll={scroll} />
@@ -277,7 +279,7 @@ function LibraryPanel(props: { compact: boolean; group?: ListGroup }) {
 function LibraryPlaceholder(props: { query: ReturnType<typeof libraryQuery>; compact: boolean }) {
   return (
     <If when={props.query.error() && !props.compact} else={<LibrarySkeleton compact={props.compact} rows={props.compact ? 4 : 6} />}>
-      <ErrorState message="Your library didn't load." onRetry={props.query.refetch} />
+      <ErrorState message={t("library.error")} onRetry={props.query.refetch} />
     </If>
   );
 }
@@ -288,16 +290,16 @@ function SignedOutPrompt(props: { compact: boolean }) {
       when={props.compact && !terminal}
       else={
         <View class="m-2 gap-3 rounded-(--radius-card) border border-border p-4">
-          <Text class="text-base font-bold text-foreground">Your playlists live here</Text>
-          <Text class="text-sm text-muted-foreground">Log in with your NetEase Cloud Music account to see your library.</Text>
+          <Text class="text-base font-bold text-foreground">{t("account.signedOutTitle")}</Text>
+          <Text class="text-sm text-muted-foreground">{t("account.signedOutBody")}</Text>
           <View class="flex-row">
-            <ActionButton label="Log in" variant="primary" onPress={signIn} />
+            <ActionButton label={t("account.logIn")} variant="primary" onPress={signIn} />
           </View>
         </View>
       }
     >
       <View class="m-2 items-center">
-        <IconButton name="logIn" label="Log in" hint onPress={signIn} />
+        <IconButton name="logIn" label={t("account.logIn")} hint onPress={signIn} />
       </View>
     </If>
   );
@@ -331,22 +333,7 @@ function Entry(props: { icon: IconName; label: string; external?: boolean; check
 
 const Separator = () => <MenuSeparator class={terminal ? "hidden" : "-mx-1 my-1 h-px bg-border"} />;
 
-/** Logs out once the user confirms: the account goes with the music, and
- * listening again requires signing in. */
-async function confirmSignOut(): Promise<void> {
-  const { action } = await AlertDialog.show({
-    title: "Log out of NetEase Cloud Music?",
-    description: "The music stops, and you'll need to log in again to listen.",
-    actions: [
-      { id: "cancel", label: "Cancel", role: "cancel" },
-      { id: "logOut", label: "Log out", role: "destructive" },
-    ],
-    closeOnEscape: true,
-  });
-  if (action === "logOut") await signOut();
-}
-
-/** The account, project links, FPS monitor and app exit. */
+/** The account, settings, project links, FPS monitor and app exit. */
 function MenuEntries(props: { name: string; image: string }) {
   return (
     <>
@@ -360,8 +347,8 @@ function MenuEntries(props: { name: string; image: string }) {
               row; an item still, for the menu's keys. It asks first. */}
           <MenuItem
             onSelect={() => void confirmSignOut()}
-            accessibilityLabel="Log out"
-            tooltip={<Hint label="Log out" />}
+            accessibilityLabel={t("account.logOut")}
+            tooltip={<Hint label={t("account.logOut")} />}
             class="size-8 items-center justify-center rounded-(--radius) hover:bg-muted focus:bg-muted active:bg-muted"
           >
             <Icon name="logOut" size={16} color="muted-foreground" />
@@ -369,21 +356,22 @@ function MenuEntries(props: { name: string; image: string }) {
         </View>
         <Separator />
       </If>
-      <Entry icon="info" label="About…" onSelect={() => setAboutOpen(true)} />
+      <Entry icon="settings" label={t("nav.settings")} onSelect={() => go(SETTINGS)} />
+      <Entry icon="info" label={t("account.aboutEllipsis")} onSelect={() => setAboutOpen(true)} />
       <Entry icon="github" label="GitHub" external onSelect={() => openExternal(REPO_URL)} />
       <Entry icon="code" label="NSH" external onSelect={() => openExternal(NSH_URL)} />
       {/* NSH's performance monitor: frame rate, frame and commit costs. */}
-      <Entry icon="activity" label="FPS" checked={fpsEnabled()} onSelect={() => setFpsEnabled(!fpsEnabled())} />
+      <Entry icon="activity" label={t("account.fps")} checked={fpsEnabled()} onSelect={() => setFpsEnabled(!fpsEnabled())} />
       <If when={(signedIn() === true && terminal) || hasAppWindow}>
         <Separator />
       </If>
       {/* A terminal has no account row: Log out is a row of its own. */}
       <If when={signedIn() === true && terminal}>
-        <Entry icon="logOut" label="Log out…" onSelect={() => void confirmSignOut()} />
+        <Entry icon="logOut" label={t("account.logOutEllipsis")} onSelect={() => void confirmSignOut()} />
       </If>
       {/* Ends the app (the music stops), as the tray's Exit. */}
       <If when={hasAppWindow}>
-        <Entry icon="power" label="Exit" onSelect={quitApp} />
+        <Entry icon="power" label={t("account.exit")} onSelect={quitApp} />
       </If>
     </>
   );
@@ -398,7 +386,7 @@ export function Account(props: { compact: boolean; placement?: "top" | "bottom";
   const side = () => props.placement ?? "top";
   // Flush with its left edge, or (in the window's top-right corner) its right.
   const align = () => props.align ?? "start";
-  const name = () => (signedIn() === true ? me.data()?.name || "Account" : "nsh-music");
+  const name = () => (signedIn() === true ? me.data()?.name || t("account.account") : "nsh-music");
   const open = signal(false);
   return (
     <Menu
@@ -414,7 +402,7 @@ export function Account(props: { compact: boolean; placement?: "top" | "bottom";
       popupEndingStyle={menuPopupLeaving(side(), align())}
       trigger={
         <Button
-          accessibilityLabel={`User menu: ${name()}`}
+          accessibilityLabel={t("account.userMenu", { name: name() })}
           selected={open()}
           tooltip={props.compact ? <Hint label={name()} /> : undefined}
           class={
@@ -454,7 +442,7 @@ export function Sidebar(props: { compact?: boolean }) {
   const compact = () => (props.compact ?? false) && !terminal;
   // The pages and the library are one region: one stop of Tab, the arrows
   // going down through the pages into the library and back.
-  const group = createListGroup({ region: "sidebar" });
+  const group = createListGroup({ region: "sidebar", when: () => layout() !== "desktop" || sidebarShown() });
   const routes: Route[] = [{ name: "home" }, { name: "search" }];
   const showsSearch = () => layout() !== "desktop" || terminal;
   const nav = createListKeys({
@@ -479,11 +467,11 @@ export function Sidebar(props: { compact?: boolean }) {
         <If when={!terminal}>
           <NavIndicator />
         </If>
-        <NavItem icon="home" label="Home" route={routes[0]} compact={compact()} keys={nav} index={0} />
+        <NavItem icon="home" label={t("nav.home")} route={routes[0]} compact={compact()} keys={nav} index={0} />
         {/* The desktop searches from the header's top-right corner; the
             phone's drawer and the terminal keep Search here. */}
         <If when={showsSearch()}>
-          <NavItem icon="search" label="Search" route={routes[1]} compact={compact()} keys={nav} index={1} />
+          <NavItem icon="search" label={t("nav.search")} route={routes[1]} compact={compact()} keys={nav} index={1} />
         </If>
       </View>
       <LibraryPanel compact={compact()} group={group} />

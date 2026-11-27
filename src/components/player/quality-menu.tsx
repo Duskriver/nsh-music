@@ -4,6 +4,7 @@
 
 import { Text, View, signal } from "nsh";
 import { Button, Menu, MenuItem } from "nsh/base";
+import { t } from "../../i18n";
 import type { AudioQuality } from "../../backend/types";
 import { player, setQuality } from "../../state/player";
 import { ready } from "../../state/session";
@@ -15,21 +16,21 @@ import { regionItem } from "../ui/regions";
 interface QualityOption {
   id: AudioQuality;
   badge: string;
-  label: string;
   detail: string;
 }
 
 const QUALITIES: QualityOption[] = [
-  { id: "standard", badge: "STD", label: "Standard", detail: "128k" },
-  { id: "exhigh", badge: "HQ", label: "High", detail: "320k" },
-  { id: "lossless", badge: "SQ", label: "Lossless", detail: "FLAC" },
-  { id: "hires", badge: "HR", label: "Hi-Res", detail: "FLAC" },
+  { id: "standard", badge: "STD", detail: "128k" },
+  { id: "exhigh", badge: "HQ", detail: "320k" },
+  { id: "lossless", badge: "SQ", detail: "FLAC" },
+  { id: "hires", badge: "HR", detail: "FLAC" },
 ];
 
 export function QualityMenu(props: { placement: "top" | "bottom" }) {
   const open = signal(false);
   const current = () => QUALITIES.find((q) => q.id === player().quality) ?? QUALITIES[1];
-  const label = () => `Audio quality: ${current().label}`;
+  const currentLabel = () => t(`player.quality.${current().id}`);
+  const label = () => t("player.quality.label", { label: currentLabel() });
 
   return (
     <Menu
@@ -48,7 +49,7 @@ export function QualityMenu(props: { placement: "top" | "bottom" }) {
           accessibilityLabel={label()}
           selected={open()}
           disabled={!ready()}
-          tooltip={open() ? undefined : <Hint label={`${label()} (${current().detail})`} />}
+          tooltip={open() ? undefined : <Hint label={t("player.quality.tooltip", { label: currentLabel(), detail: current().detail })} />}
           class={
             terminal
               ? "px-1 focus:bg-muted"
@@ -79,7 +80,7 @@ export function QualityMenu(props: { placement: "top" | "bottom" }) {
             indicatorClass={terminal ? undefined : "hidden"}
           >
             <Text class="w-8 font-mono text-xs text-muted-foreground">{q().badge}</Text>
-            <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{q().label}</Text>
+            <Text class="line-clamp-1 flex-1 text-sm text-popover-foreground group-checked:font-semibold">{t(`player.quality.${q().id}`)}</Text>
             <Text class="text-xs text-muted-foreground">{q().detail}</Text>
             <View class="w-4 items-end">
               <If when={!terminal && player().quality === q().id}>
