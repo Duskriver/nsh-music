@@ -53,6 +53,10 @@ pub struct Track {
     pub explicit: bool,
     /// Whether it can be played in this account's region.
     pub playable: bool,
+    /// When this track was added to the playlist (`""` or ISO-8601 UTC when known).
+    pub added_at: String,
+    /// The track's or album's release date (`""` or ISO-8601 UTC when known).
+    pub release_date: String,
 }
 
 /// The header of a collection's page.

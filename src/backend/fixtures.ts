@@ -96,6 +96,7 @@ function trackOf(album: AlbumSeed, index: number): Track {
     durationMs: seconds * 1000,
     explicit: index === 3,
     playable: true,
+    releaseDate: `${album.year}-01-01T00:00:00Z`,
   };
 }
 
@@ -212,13 +213,21 @@ export function library(): Library {
   };
 }
 
+/** The tracks with made-up add dates, one per day and shuffled against the
+ * list's order, so sorting by date visibly reorders them. */
+function dated(tracks: Track[]): Track[] {
+  const day = 24 * 60 * 60 * 1000;
+  const base = Date.UTC(2026, 0, 1);
+  return tracks.map((t, i) => ({ ...t, addedAt: new Date(base + ((i * 7) % tracks.length) * day).toISOString() }));
+}
+
 /** A collection by URI, or null when the demo has none. */
 export function collection(uri: string): Collection | null {
   const [, kind, id] = uri.split(":");
   if (uri === LIKED_URI) {
     return {
       header: { uri, kind: "collection", name: "Liked Songs", subtitle: `${LIKED.length} songs`, image: "", description: "" },
-      tracks: LIKED,
+      tracks: dated(LIKED),
       releases: [],
       total: LIKED.length,
     };
@@ -228,7 +237,7 @@ export function collection(uri: string): Collection | null {
     if (!p) return null;
     return {
       header: { uri, kind, name: p.name, subtitle: `Demo · ${p.tracks.length} songs`, image: coverOf(p.id), description: p.description },
-      tracks: p.tracks,
+      tracks: dated(p.tracks),
       releases: [],
       total: p.tracks.length,
     };

@@ -82,6 +82,7 @@ struct LikedCache {
 }
 
 type StreamInflightEntry = Arc<(Mutex<Option<Result<String, EngineError>>>, Condvar)>;
+type DailyCoverInflightEntry = Arc<(Mutex<Option<Result<String, EngineError>>>, Condvar)>;
 
 #[derive(Default)]
 struct StreamBufferInner {
@@ -280,6 +281,8 @@ pub struct NetEaseClient {
     liked_refreshing: AtomicBool,
     liked_playlist_id: Mutex<Option<(String, String)>>,
     collection_cache: Mutex<HashMap<String, (Collection, Instant)>>,
+    daily_cover_cache: Mutex<Option<(String, String, Instant)>>,
+    daily_cover_inflight: Mutex<Option<(String, DailyCoverInflightEntry)>>,
 }
 
 fn now_millis() -> u64 {
@@ -606,6 +609,8 @@ impl NetEaseClient {
             liked_refreshing: AtomicBool::new(false),
             liked_playlist_id: Mutex::new(None),
             collection_cache: Mutex::new(HashMap::new()),
+            daily_cover_cache: Mutex::new(None),
+            daily_cover_inflight: Mutex::new(None),
         }
     }
 
@@ -652,6 +657,8 @@ impl NetEaseClient {
         *self.liked_cache.lock().unwrap() = None;
         *self.liked_playlist_id.lock().unwrap() = None;
         self.collection_cache.lock().unwrap().clear();
+        *self.daily_cover_cache.lock().unwrap() = None;
+        *self.daily_cover_inflight.lock().unwrap() = None;
         let _ = fs::remove_file(&self.session_file);
     }
 
@@ -1057,6 +1064,8 @@ impl NetEaseClient {
         *self.liked_cache.lock().unwrap() = None;
         *self.liked_playlist_id.lock().unwrap() = None;
         self.collection_cache.lock().unwrap().clear();
+        *self.daily_cover_cache.lock().unwrap() = None;
+        *self.daily_cover_inflight.lock().unwrap() = None;
         self.persist_session();
         Ok(QrPollResult::Success)
     }
@@ -1218,16 +1227,23 @@ impl NetEaseClient {
             "网易云音乐 · 发现音乐".to_string()
         };
 
-        let (rec_res, top_res) = std::thread::scope(|scope| {
+        let (rec_res, top_res, daily_cover) = std::thread::scope(|scope| {
             let rec_handle = scope.spawn(|| {
                 let mut params = HashMap::new();
                 params.insert("limit", json!(24));
                 self.request("/api/personalized/playlist", &params, false)
             });
             let top_handle = scope.spawn(|| self.request("/api/toplist/detail", &HashMap::new(), false));
+            let daily_handle = profile.as_ref().map(|p| {
+                let uid = p.id.as_str();
+                scope.spawn(move || self.daily_cover(uid))
+            });
             (
                 rec_handle.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "home request failed"))),
                 top_handle.join().unwrap_or_else(|_| Err(EngineError::new(ErrorCode::Internal, "toplist request failed"))),
+                daily_handle
+                    .and_then(|h| h.join().ok())
+                    .unwrap_or_default(),
             )
         });
 
@@ -1315,7 +1331,7 @@ impl NetEaseClient {
                         kind: "playlist".to_string(),
                         name: "每日推荐".to_string(),
                         subtitle: "每天 6:00 更新 · 专属推荐".to_string(),
-                        image: cover0,
+                        image: daily_cover,
                     },
                     Item {
                         uri: "netease:collection:tracks".to_string(),
@@ -1494,7 +1510,7 @@ impl NetEaseClient {
 
         if uri == "netease:playlist:daily" {
             // Daily recommend songs
-            let _ = self.require_profile()?;
+            let profile = self.require_profile()?;
             let res = self.request("/api/v3/discovery/recommend/songs", &HashMap::new(), false)?;
             let songs = res
                 .get("data")
@@ -1514,13 +1530,14 @@ impl NetEaseClient {
                     kind: "playlist".to_string(),
                     name: "每日推荐".to_string(),
                     subtitle: "网易云音乐".to_string(),
-                    image: tracks.first().map(|t| t.image.clone()).unwrap_or_default(),
+                    image: first_track_cover(&tracks),
                     description: "根据你的音乐口味生成，每天 6:00 更新".to_string(),
                 },
                 total: tracks.len() as f64,
                 tracks,
                 releases: Vec::new(),
             };
+            self.cache_daily_cover(&profile.id, &collection.header.image);
             self.cache_collection(&collection);
             return Ok(collection);
         }
@@ -1528,7 +1545,8 @@ impl NetEaseClient {
         let raw_id = valid_positive_id(uri.strip_prefix("netease:playlist:").unwrap_or(&uri))?;
         let p = self.fetch_playlist_detail(&raw_id)?;
         let parsed = parse_playlist_detail(&p);
-        let tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+        let mut tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+        apply_added_at(&mut tracks, &parsed.track_added_at);
         let total = parsed.track_count.unwrap_or(tracks.len() as f64);
 
         let collection = Collection {
@@ -1824,6 +1842,109 @@ impl NetEaseClient {
         None
     }
 
+    fn cache_daily_cover(&self, uid: &str, cover: &str) {
+        if cover.is_empty() {
+            return;
+        }
+        *self.daily_cover_cache.lock().unwrap() =
+            Some((uid.to_string(), cover.to_string(), Instant::now()));
+    }
+
+    fn cached_daily_cover(&self, uid: &str) -> Option<String> {
+        {
+            let mut lock = self.daily_cover_cache.lock().unwrap();
+            if let Some((cached_uid, cover, at)) = lock.as_ref() {
+                if at.elapsed() >= COLLECTION_PLAYBACK_TTL {
+                    *lock = None;
+                } else if cached_uid == uid && !cover.is_empty() {
+                    return Some(cover.clone());
+                }
+            }
+        }
+        let lock = self.collection_cache.lock().unwrap();
+        if let Some((col, at)) = lock.get("netease:playlist:daily") {
+            if at.elapsed() < COLLECTION_PLAYBACK_TTL && !col.header.image.is_empty() {
+                return Some(col.header.image.clone());
+            }
+        }
+        None
+    }
+
+    fn daily_cover(&self, uid: &str) -> String {
+        if let Some(cover) = self.cached_daily_cover(uid) {
+            return cover;
+        }
+
+        let entry: DailyCoverInflightEntry = {
+            let mut inflight = self.daily_cover_inflight.lock().unwrap();
+            if let Some((ref cur_uid, ref existing)) = *inflight {
+                if cur_uid == uid {
+                    let existing = Arc::clone(existing);
+                    drop(inflight);
+                    let mut guard = existing.0.lock().unwrap();
+                    while guard.is_none() {
+                        guard = existing.1.wait(guard).unwrap();
+                    }
+                    return guard
+                        .as_ref()
+                        .and_then(|res| res.as_ref().ok())
+                        .cloned()
+                        .unwrap_or_default();
+                }
+            }
+            let new_entry = Arc::new((Mutex::new(None), Condvar::new()));
+            *inflight = Some((uid.to_string(), Arc::clone(&new_entry)));
+            new_entry
+        };
+
+        struct DailyInflightGuard<'a> {
+            slot: &'a Mutex<Option<(String, DailyCoverInflightEntry)>>,
+            entry: DailyCoverInflightEntry,
+            completed: bool,
+        }
+        impl Drop for DailyInflightGuard<'_> {
+            fn drop(&mut self) {
+                let mut slot = self.slot.lock().unwrap();
+                if slot.as_ref().is_some_and(|(_, cur)| Arc::ptr_eq(cur, &self.entry)) {
+                    *slot = None;
+                }
+                drop(slot);
+                if !self.completed {
+                    *self.entry.0.lock().unwrap() = Some(Err(EngineError::new(
+                        ErrorCode::Internal,
+                        "每日推荐封面获取意外中断",
+                    )));
+                    self.entry.1.notify_all();
+                }
+            }
+        }
+        let mut guard = DailyInflightGuard {
+            slot: &self.daily_cover_inflight,
+            entry: Arc::clone(&entry),
+            completed: false,
+        };
+
+        let result = self
+            .request("/api/v3/discovery/recommend/songs", &HashMap::new(), false)
+            .map(|res| daily_cover_from_response(&res));
+        if let Ok(ref cover) = result {
+            let still_same_user = self
+                .profile
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|p| p.id == uid);
+            if still_same_user {
+                self.cache_daily_cover(uid, cover);
+            }
+        }
+
+        *entry.0.lock().unwrap() = Some(result.clone());
+        entry.1.notify_all();
+        guard.completed = true;
+        result.unwrap_or_default()
+    }
+
     fn cache_collection(&self, collection: &Collection) {
         let mut cache = self.collection_cache.lock().unwrap();
         cache.retain(|_, (_, at)| at.elapsed() < COLLECTION_PLAYBACK_TTL);
@@ -1930,7 +2051,8 @@ impl NetEaseClient {
             match self.fetch_playlist_detail(&pid) {
                 Ok(p) => {
                     let parsed = parse_playlist_detail(&p);
-                    let tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+                    let mut tracks = self.song_details_with_fallback(&parsed.track_ids, parsed.preview_tracks)?;
+                    apply_added_at(&mut tracks, &parsed.track_added_at);
                     let cover = tracks
                         .first()
                         .map(|t| t.image.clone())
@@ -1982,56 +2104,62 @@ impl NetEaseClient {
     pub fn library(&self) -> Result<Library, EngineError> {
         let profile = self.require_profile()?;
 
-        let mut playlist_items = Vec::new();
-        let mut liked_cover = String::new();
-        let mut offset = 0usize;
+        let (daily_cover, playlists_res) = std::thread::scope(|scope| {
+            let uid = profile.id.as_str();
+            let daily_handle = scope.spawn(move || self.daily_cover(uid));
+            let playlists_res = (|| -> Result<(String, Vec<Item>), EngineError> {
+                let mut playlist_items = Vec::new();
+                let mut liked_cover = String::new();
+                let mut offset = 0usize;
 
-        while offset < 2000 {
-            let res = self.fetch_user_playlist_page(&profile.id, offset)?;
-            let arr = res.get("playlist").and_then(Value::as_array);
-            let page_len = arr.map_or(0, Vec::len);
+                while offset < 2000 {
+                    let res = self.fetch_user_playlist_page(&profile.id, offset)?;
+                    let arr = res.get("playlist").and_then(Value::as_array);
+                    let page_len = arr.map_or(0, Vec::len);
 
-            if let Some(arr) = arr {
-                for p in arr {
-                    if is_own_liked_playlist(p, &profile.id) {
-                        if let Some(id) = p.get("id").and_then(value_id_str) {
-                            *self.liked_playlist_id.lock().unwrap() = Some((profile.id.clone(), id));
+                    if let Some(arr) = arr {
+                        for p in arr {
+                            if is_own_liked_playlist(p, &profile.id) {
+                                if let Some(id) = p.get("id").and_then(value_id_str) {
+                                    *self.liked_playlist_id.lock().unwrap() = Some((profile.id.clone(), id));
+                                }
+                                if liked_cover.is_empty() {
+                                    liked_cover = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
+                                }
+                                continue;
+                            }
+                            if let Some(id) = p.get("id").and_then(value_id_str) {
+                                let name = p.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                                let count = p.get("trackCount").and_then(Value::as_i64).unwrap_or(0);
+                                let owner = p
+                                    .get("creator")
+                                    .and_then(|c| c.get("nickname").and_then(Value::as_str))
+                                    .unwrap_or("");
+                                let image = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
+                                playlist_items.push(Item {
+                                    uri: format!("netease:playlist:{id}"),
+                                    kind: "playlist".to_string(),
+                                    name,
+                                    subtitle: format!("{count} 首 · by {owner}"),
+                                    image,
+                                });
+                            }
                         }
-                        if liked_cover.is_empty() {
-                            liked_cover = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
-                        }
-                        continue;
                     }
-                    if let Some(id) = p.get("id").and_then(value_id_str) {
-                        let name = p.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                        let count = p.get("trackCount").and_then(Value::as_i64).unwrap_or(0);
-                        let owner = p
-                            .get("creator")
-                            .and_then(|c| c.get("nickname").and_then(Value::as_str))
-                            .unwrap_or("");
-                        let image = artwork_url(p.get("coverImgUrl").and_then(Value::as_str));
-                        playlist_items.push(Item {
-                            uri: format!("netease:playlist:{id}"),
-                            kind: "playlist".to_string(),
-                            name,
-                            subtitle: format!("{count} 首 · by {owner}"),
-                            image,
-                        });
+
+                    let more = res.get("more").and_then(Value::as_bool).unwrap_or(false);
+                    if !more || page_len < 200 {
+                        break;
                     }
+                    offset += page_len;
                 }
-            }
 
-            let more = res.get("more").and_then(Value::as_bool).unwrap_or(false);
-            if !more || page_len < 200 {
-                break;
-            }
-            offset += page_len;
-        }
-
-        let daily_cover = playlist_items
-            .first()
-            .map(|i| i.image.clone())
-            .unwrap_or_default();
+                Ok((liked_cover, playlist_items))
+            })();
+            let daily_cover = daily_handle.join().unwrap_or_default();
+            (daily_cover, playlists_res)
+        });
+        let (liked_cover, playlist_items) = playlists_res?;
 
         let mut items = vec![
             Item {
@@ -2116,6 +2244,7 @@ struct ParsedPlaylist<'a> {
     description: String,
     preview_tracks: &'a [Value],
     track_ids: Vec<String>,
+    track_added_at: Vec<String>,
     track_count: Option<f64>,
 }
 
@@ -2126,6 +2255,38 @@ fn is_own_liked_playlist(p: &Value, uid: &str) -> bool {
             .and_then(value_id_str)
             .as_deref()
             == Some(uid)
+}
+
+fn apply_added_at(tracks: &mut [Track], added_at: &[String]) {
+    for (track, ts) in tracks.iter_mut().zip(added_at.iter()) {
+        if !ts.is_empty() {
+            track.added_at = ts.clone();
+        }
+    }
+}
+
+fn epoch_ms_to_iso(ms: i64) -> String {
+    if ms <= 0 {
+        return String::new();
+    }
+    let secs = ms / 1000;
+    let days = secs.div_euclid(86_400);
+    let day_secs = secs.rem_euclid(86_400);
+    let hour = day_secs / 3600;
+    let minute = (day_secs % 3600) / 60;
+    let second = day_secs % 60;
+    // Howard Hinnant's civil_from_days algorithm (days since 1970-01-01).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 fn parse_playlist_detail(p: &Value) -> ParsedPlaylist<'_> {
@@ -2142,14 +2303,22 @@ fn parse_playlist_detail(p: &Value) -> ParsedPlaylist<'_> {
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let track_ids: Vec<String> = p
+    let (track_ids, track_added_at): (Vec<String>, Vec<String>) = p
         .get("trackIds")
         .and_then(Value::as_array)
         .or_else(|| p.get("tracks").and_then(Value::as_array))
         .map(|arr| {
             arr.iter()
-                .filter_map(|t| t.get("id").and_then(value_id_str))
-                .collect()
+                .filter_map(|t| {
+                    let id = t.get("id").and_then(value_id_str)?;
+                    let added = t
+                        .get("at")
+                        .and_then(Value::as_i64)
+                        .map(epoch_ms_to_iso)
+                        .unwrap_or_default();
+                    Some((id, added))
+                })
+                .unzip()
         })
         .unwrap_or_default();
     let track_count = p.get("trackCount").and_then(Value::as_f64);
@@ -2161,6 +2330,7 @@ fn parse_playlist_detail(p: &Value) -> ParsedPlaylist<'_> {
         description,
         preview_tracks,
         track_ids,
+        track_added_at,
         track_count,
     }
 }
@@ -2177,6 +2347,8 @@ fn unavailable_track(id_str: &str) -> Track {
         duration_ms: 0.0,
         explicit: false,
         playable: false,
+        added_at: String::new(),
+        release_date: String::new(),
     }
 }
 
@@ -2219,6 +2391,32 @@ fn map_ureq_error(err: ureq::Error) -> EngineError {
             format!("无法读取网易云音乐，请检查网络及系统代理后重试: {other}"),
         ),
     }
+}
+
+fn song_cover_url(s: &Value) -> String {
+    let album_obj = s.get("al").or_else(|| s.get("album"));
+    artwork_url(album_obj.and_then(|a| a.get("picUrl").and_then(Value::as_str)))
+}
+
+fn daily_cover_from_response(res: &Value) -> String {
+    res.get("data")
+        .and_then(|d| d.get("dailySongs"))
+        .and_then(Value::as_array)
+        .and_then(|songs| {
+            songs
+                .iter()
+                .map(song_cover_url)
+                .find(|cover| !cover.is_empty())
+        })
+        .unwrap_or_default()
+}
+
+fn first_track_cover(tracks: &[Track]) -> String {
+    tracks
+        .iter()
+        .find(|t| !t.image.is_empty())
+        .map(|t| t.image.clone())
+        .unwrap_or_default()
 }
 
 fn track_from_json(
@@ -2279,6 +2477,13 @@ fn track_from_json(
         fee != 1 && fee != 4
     };
 
+    let release_date = s
+        .get("publishTime")
+        .or_else(|| album_obj.and_then(|a| a.get("publishTime")))
+        .and_then(Value::as_i64)
+        .map(epoch_ms_to_iso)
+        .unwrap_or_default();
+
     Track {
         uri: format!("netease:track:{id_str}"),
         uid: id_str.to_string(),
@@ -2290,6 +2495,8 @@ fn track_from_json(
         duration_ms,
         explicit: false,
         playable,
+        added_at: String::new(),
+        release_date,
     }
 }
 
@@ -3053,17 +3260,23 @@ mod tests {
             "ar": [{ "name": "Artist" }],
             "al": { "id": 0, "name": "" },
             "dt": 120000,
+            "publishTime": 1_704_067_200_000_i64,
             "fee": 1,
             "privilege": { "st": 0, "pl": 320000 }
         });
         let track = track_from_json("99", &raw, None, false);
         assert!(track.album_uri.is_empty());
         assert!(track.playable);
+        assert_eq!(track.release_date, "2024-01-01T00:00:00Z");
+        assert!(track.added_at.is_empty());
     }
 
     #[test]
     fn parse_playlist_detail_keeps_all_track_ids_beyond_1000_in_order() {
-        let track_ids: Vec<Value> = (1..=1250).rev().map(|id| json!({ "id": id })).collect();
+        let track_ids: Vec<Value> = (1..=1250)
+            .rev()
+            .map(|id| json!({ "id": id, "at": 1_704_067_200_000_i64 + id * 1000 }))
+            .collect();
         let playlist = json!({
             "name": "我喜欢的音乐",
             "creator": { "nickname": "Tester" },
@@ -3076,6 +3289,7 @@ mod tests {
         assert_eq!(parsed.track_ids.len(), 1250);
         assert_eq!(parsed.track_ids.first().map(String::as_str), Some("1250"));
         assert_eq!(parsed.track_ids.last().map(String::as_str), Some("1"));
+        assert_eq!(parsed.track_added_at.last().map(String::as_str), Some("2024-01-01T00:00:01Z"));
         assert_eq!(parsed.track_count, Some(1250.0));
     }
 
@@ -3188,6 +3402,85 @@ mod tests {
             at: Instant::now(),
         });
         assert_eq!(client.cached_track_liked("netease:track:777"), (true, false));
+
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn daily_cover_helpers_select_first_non_empty_normalized_artwork() {
+        let res = json!({
+            "data": {
+                "dailySongs": [
+                    { "id": 1, "al": { "picUrl": "" } },
+                    { "id": 2, "al": { "picUrl": "http://p1.music.126.net/abc/123.jpg" } },
+                    { "id": 3, "al": { "picUrl": "https://p2.music.126.net/def/456.jpg" } }
+                ]
+            }
+        });
+        assert_eq!(
+            daily_cover_from_response(&res),
+            "https://p1.music.126.net/abc/123.jpg?param=300y300"
+        );
+        assert_eq!(daily_cover_from_response(&json!({ "data": {} })), "");
+
+        let tracks = vec![
+            Track {
+                uri: "netease:track:1".to_string(),
+                image: String::new(),
+                ..Track::default()
+            },
+            Track {
+                uri: "netease:track:2".to_string(),
+                image: "https://p1.music.126.net/abc/123.jpg?param=300y300".to_string(),
+                ..Track::default()
+            },
+        ];
+        assert_eq!(
+            first_track_cover(&tracks),
+            "https://p1.music.126.net/abc/123.jpg?param=300y300"
+        );
+        assert_eq!(first_track_cover(&[]), "");
+    }
+
+    #[test]
+    fn daily_cover_cache_scopes_by_uid_falls_back_to_collection_and_clears() {
+        let data = std::env::temp_dir().join(format!("nsh-music-netease-daily-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+        let client = NetEaseClient::new(&data);
+        client.save_cookie_str("MUSIC_U=fixture");
+
+        assert_eq!(client.cached_daily_cover("42"), None);
+
+        client.cache_daily_cover("42", "https://p1.music.126.net/daily/cover.jpg?param=600y600");
+        assert_eq!(
+            client.cached_daily_cover("42"),
+            Some("https://p1.music.126.net/daily/cover.jpg?param=600y600".to_string())
+        );
+        assert_eq!(client.cached_daily_cover("99"), None);
+
+        client.clear_session();
+        assert_eq!(client.cached_daily_cover("42"), None);
+
+        // Falls back to fresh collection_cache["netease:playlist:daily"] when daily_cover_cache is empty.
+        let daily_collection = Collection {
+            header: Header {
+                uri: "netease:playlist:daily".to_string(),
+                kind: "playlist".to_string(),
+                name: "每日推荐".to_string(),
+                subtitle: "网易云音乐".to_string(),
+                image: "https://p2.music.126.net/daily/from-collection.jpg?param=600y600".to_string(),
+                description: String::new(),
+            },
+            tracks: Vec::new(),
+            releases: Vec::new(),
+            total: 0.0,
+        };
+        client.cache_collection(&daily_collection);
+        assert_eq!(
+            client.cached_daily_cover("42"),
+            Some("https://p2.music.126.net/daily/from-collection.jpg?param=600y600".to_string())
+        );
 
         let _ = fs::remove_dir_all(&data);
     }

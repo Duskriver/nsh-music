@@ -111,6 +111,11 @@ export interface Track {
   durationMs: number;
   explicit: boolean;
   playable: boolean;
+  /** When the track was added to the playlist (ISO-8601), or empty when not
+   * a playlist entry or unknown. */
+  addedAt?: string;
+  /** The album's release date (ISO-8601), or empty when unknown. */
+  releaseDate?: string;
 }
 
 /** The header of a collection's page. */
