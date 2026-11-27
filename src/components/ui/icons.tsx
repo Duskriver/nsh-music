@@ -1,10 +1,54 @@
-// The app's icons: one family of glyphs (Tabler Icons), drawn
-// as an SVG data-URI through `Image`, in a theme token's color. TSX has no
-// inline-SVG element, so the token's value is put into the SVG and read
-// again when the appearance changes. A terminal draws no images: icon-only
-// controls show text there instead (see `controls.tsx`).
+// The app's icons: one family of glyphs (Tabler Icons, from nsh-icon's
+// `nsh-icon-tabler`), drawn by nsh-icon's `Icon` in a theme token's text
+// color. A hover morph redraws a glyph from its SVG. A terminal draws no
+// images: icon-only controls show text there instead (see `controls.tsx`).
 
-import { batch, cleanup, colorScheme, effect, Image, type MotionName, type MotionSpec, reduceMotion, signal, type Tokens, token, untracked, View } from "nsh";
+import { batch, cleanup, colorScheme, effect, type MotionName, type MotionSpec, reduceMotion, signal, type Tokens, token, untracked, View } from "nsh";
+import { Icon as Glyph } from "nsh-icon";
+import {
+  Activity,
+  AlertCircle,
+  ArrowNarrowDown,
+  ArrowNarrowUp,
+  ArrowsShuffle,
+  ArrowUpRight,
+  Books,
+  BrandGithub,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Code,
+  Compass,
+  Disc,
+  Heart,
+  HeartFilled,
+  Home,
+  InfoCircle,
+  Keyboard,
+  LayoutSidebarLeftCollapse,
+  LayoutSidebarLeftExpand,
+  Login,
+  Logout,
+  Microphone,
+  Music,
+  PlayerPauseFilled,
+  PlayerPlayFilled,
+  PlayerSkipBackFilled,
+  PlayerSkipForwardFilled,
+  Power,
+  Repeat,
+  RepeatOnce,
+  Search,
+  Settings,
+  Sparkles,
+  User,
+  Volume,
+  Volume2,
+  Volume3,
+  X,
+} from "nsh-icon-tabler";
 import { lazyMotion } from "./motion";
 import { BLUR, DURATION, EASING, SCALE } from "./tokens";
 
@@ -14,54 +58,73 @@ export type IconName =
   | "volumeMute" | "chevronLeft" | "chevronRight" | "chevronDown" | "music" | "user"
   | "logIn" | "logOut" | "disc" | "clock" | "alert" | "close"
   | "sparkles" | "externalLink" | "info" | "github" | "code" | "check"
-  | "sidebarCollapse" | "sidebarExpand" | "power" | "activity" | "compass" | "microphone";
+  | "sidebarCollapse" | "sidebarExpand" | "power" | "activity" | "compass" | "microphone"
+  | "arrowUp" | "arrowDown" | "settings" | "keyboard";
 
-// Tabler Icons 3.19.0 (MIT, tabler.io/icons): Outline at a 1.5pt stroke,
-// and Filled for the transport and the liked heart. Each is the inside of a
-// 24×24 SVG, its colour `@`.
-const BODY: Record<IconName, string> = {
-  home: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l-2 0l9 -9l9 9l-2 0" /> <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" /> <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" /></g>`,
-  compass: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 16l2 -6l6 -2l-2 6l-6 2" /> <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /> <path d="M12 3v2" /> <path d="M12 19v2" /> <path d="M3 12h2" /> <path d="M19 12h2" /></g>`,
-  search: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" /> <path d="M21 21l-6 -6" /></g>`,
-  library: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z" /> <path d="M9 4m0 1a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1z" /> <path d="M5 8h4" /> <path d="M9 16h4" /> <path d="M13.803 4.56l2.184 -.53c.562 -.135 1.133 .19 1.282 .732l3.695 13.418a1.02 1.02 0 0 1 -.634 1.219l-.133 .041l-2.184 .53c-.562 .135 -1.133 -.19 -1.282 -.732l-3.695 -13.418a1.02 1.02 0 0 1 .634 -1.219l.133 -.041z" /> <path d="M14 9l4 -1" /> <path d="M16 16l3.923 -.98" /></g>`,
-  play: `<g fill="@"><path d="M6 4v16a1 1 0 0 0 1.524 .852l13 -8a1 1 0 0 0 0 -1.704l-13 -8a1 1 0 0 0 -1.524 .852z" /></g>`,
-  pause: `<g fill="@"><path d="M9 4h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h2a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2z" /> <path d="M17 4h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h2a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2z" /></g>`,
-  skipBack: `<g fill="@"><path d="M19.496 4.136l-12 7a1 1 0 0 0 0 1.728l12 7a1 1 0 0 0 1.504 -.864v-14a1 1 0 0 0 -1.504 -.864z" /> <path d="M4 4a1 1 0 0 1 .993 .883l.007 .117v14a1 1 0 0 1 -1.993 .117l-.007 -.117v-14a1 1 0 0 1 1 -1z" /></g>`,
-  skipForward: `<g fill="@"><path d="M3 5v14a1 1 0 0 0 1.504 .864l12 -7a1 1 0 0 0 0 -1.728l-12 -7a1 1 0 0 0 -1.504 .864z" /> <path d="M20 4a1 1 0 0 1 .993 .883l.007 .117v14a1 1 0 0 1 -1.993 .117l-.007 -.117v-14a1 1 0 0 1 1 -1z" /></g>`,
-  shuffle: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 4l3 3l-3 3" /> <path d="M18 20l3 -3l-3 -3" /> <path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" /> <path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" /></g>`,
-  repeat: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3" /> <path d="M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3" /></g>`,
-  repeatOne: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v-3a3 3 0 0 1 3 -3h13m-3 -3l3 3l-3 3" /> <path d="M20 12v3a3 3 0 0 1 -3 3h-13m3 3l-3 -3l3 -3" /> <path d="M11 11l1 -1v4" /></g>`,
-  heart: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12.572l-7.5 7.428l-7.5 -7.428a5 5 0 1 1 7.5 -6.566a5 5 0 1 1 7.5 6.572" /></g>`,
-  heartFilled: `<g fill="@"><path d="M6.979 3.074a6 6 0 0 1 4.988 1.425l.037 .033l.034 -.03a6 6 0 0 1 4.733 -1.44l.246 .036a6 6 0 0 1 3.364 10.008l-.18 .185l-.048 .041l-7.45 7.379a1 1 0 0 1 -1.313 .082l-.094 -.082l-7.493 -7.422a6 6 0 0 1 3.176 -10.215z" /></g>`,
-  volume: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8a5 5 0 0 1 0 8" /> <path d="M17.7 5a9 9 0 0 1 0 14" /> <path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" /></g>`,
-  volumeLow: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8a5 5 0 0 1 0 8" /> <path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" /></g>`,
-  volumeMute: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" /> <path d="M16 10l4 4m0 -4l-4 4" /></g>`,
-  chevronLeft: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6l6 6" /></g>`,
-  chevronRight: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6l-6 6" /></g>`,
-  chevronDown: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6l6 -6" /></g>`,
-  music: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /> <path d="M13 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /> <path d="M9 17v-13h10v13" /> <path d="M9 8h10" /></g>`,
-  user: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0" /> <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" /></g>`,
-  logIn: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8v-2a2 2 0 0 1 2 -2h7a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-7a2 2 0 0 1 -2 -2v-2" /> <path d="M3 12h13l-3 -3" /> <path d="M13 15l3 -3" /></g>`,
-  logOut: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2" /> <path d="M9 12h12l-3 -3" /> <path d="M18 15l3 -3" /></g>`,
-  disc: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /> <path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /> <path d="M7 12a5 5 0 0 1 5 -5" /> <path d="M12 17a5 5 0 0 0 5 -5" /></g>`,
-  clock: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" /> <path d="M12 7v5l3 3" /></g>`,
-  alert: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" /> <path d="M12 8v4" /> <path d="M12 16h.01" /></g>`,
-  close: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6l-12 12" /> <path d="M6 6l12 12" /></g>`,
-  sparkles: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2zm0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2zm-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" /></g>`,
-  externalLink: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7l-10 10" /> <path d="M8 7l9 0l0 9" /></g>`,
-  info: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" /> <path d="M12 9h.01" /> <path d="M11 12h1v4h1" /></g>`,
-  github: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" /></g>`,
-  code: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8l-4 4l4 4" /> <path d="M17 8l4 4l-4 4" /> <path d="M14 4l-4 16" /></g>`,
-  check: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5l10 -10" /></g>`,
-  sidebarCollapse: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" /> <path d="M9 4v16" /> <path d="M15 10l-2 2l2 2" /></g>`,
-  sidebarExpand: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z" /> <path d="M9 4v16" /> <path d="M14 10l2 2l-2 2" /></g>`,
-  power: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6a7.75 7.75 0 1 0 10 0" /> <path d="M12 4l0 8" /></g>`,
-  activity: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8l4 -16l3 8h4" /></g>`,
-  microphone: `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2m0 3a3 3 0 0 1 3 -3h0a3 3 0 0 1 3 3v5a3 3 0 0 1 -3 3h0a3 3 0 0 1 -3 -3z" /> <path d="M5 10a7 7 0 0 0 14 0" /> <path d="M8 21l8 0" /> <path d="M12 17l0 4" /></g>`,
+// Tabler Icons: Outline, and Filled for the transport and the liked heart.
+const GLYPHS: Record<IconName, string> = {
+  home: Home,
+  compass: Compass,
+  search: Search,
+  library: Books,
+  play: PlayerPlayFilled,
+  pause: PlayerPauseFilled,
+  skipBack: PlayerSkipBackFilled,
+  skipForward: PlayerSkipForwardFilled,
+  shuffle: ArrowsShuffle,
+  repeat: Repeat,
+  repeatOne: RepeatOnce,
+  heart: Heart,
+  heartFilled: HeartFilled,
+  volume: Volume,
+  volumeLow: Volume2,
+  volumeMute: Volume3,
+  chevronLeft: ChevronLeft,
+  chevronRight: ChevronRight,
+  chevronDown: ChevronDown,
+  music: Music,
+  user: User,
+  logIn: Login,
+  logOut: Logout,
+  disc: Disc,
+  clock: Clock,
+  alert: AlertCircle,
+  close: X,
+  sparkles: Sparkles,
+  externalLink: ArrowUpRight,
+  info: InfoCircle,
+  github: BrandGithub,
+  code: Code,
+  check: Check,
+  sidebarCollapse: LayoutSidebarLeftCollapse,
+  sidebarExpand: LayoutSidebarLeftExpand,
+  power: Power,
+  activity: Activity,
+  microphone: Microphone,
+  arrowUp: ArrowNarrowUp,
+  arrowDown: ArrowNarrowDown,
+  settings: Settings,
+  keyboard: Keyboard,
 };
 
+/** The width of the outline glyphs' lines, of their 24 units. */
+const STROKE = 1.5;
+
+const SVG = "data:image/svg+xml,";
+
+/** A glyph's SVG split around its drawing: `[open, body, close]`. */
+function split(uri: string): [string, string, string] {
+  const svg = decodeURIComponent(uri.slice(SVG.length));
+  const open = svg.indexOf(">") + 1;
+  const close = svg.lastIndexOf("</");
+  return [svg.slice(0, open), svg.slice(open, close), svg.slice(close)];
+}
+
+/** The inside of `name`'s SVG (24×24, in `currentColor`). */
+const bodyOf = (name: IconName) => split(GLYPHS[name])[1];
+
 /** The speaker alone: the first frame of the volume icons' morph. */
-const SPEAKER = `<g stroke="@" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" /></g>`;
+const speaker = () => bodyOf("volumeMute").match(/<path d='M6 15h-2[^>]*>/)?.[0] ?? bodyOf("volumeMute");
 
 /** The glyph at `t` (0..1) through its hover morph: the drawing itself
  * changes, in a way that says what the control does. At 0 and 1, the glyph
@@ -91,9 +154,9 @@ const MORPHS: Partial<Record<IconName, [Morph, number]>> = {
   heart: [(body, t) => scaled(body, 1 + 0.14 * env(t)), 320],
   heartFilled: [(body, t) => scaled(body, 1 + 0.14 * env(t)), 320],
   // The sound comes back: the speaker alone, then its waves one by one.
-  volume: [(body, t) => (t < 0.3 ? SPEAKER : t < 0.6 ? BODY.volumeLow : body), 420],
-  volumeLow: [(body, t) => (t < 0.45 ? SPEAKER : body), 300],
-  volumeMute: [(body, t) => (t < 0.45 ? SPEAKER : body), 300],
+  volume: [(body, t) => (t < 0.3 ? speaker() : t < 0.6 ? bodyOf("volumeLow") : body), 420],
+  volumeLow: [(body, t) => (t < 0.45 ? speaker() : body), 300],
+  volumeMute: [(body, t) => (t < 0.45 ? speaker() : body), 300],
   // The bars press together a little; the triangle leans on.
   pause: [(body, t) => `<g transform="translate(${C} 0) scale(${(1 - 0.18 * env(t)).toFixed(3)} 1) translate(${-C} 0)">${body}</g>`, 300],
   play: [(body, t) => `<g transform="translate(${(1.3 * env(t)).toFixed(2)} 0)">${body}</g>`, 300],
@@ -111,15 +174,17 @@ export function morphs(name: IconName): boolean {
 const URIS = new Map<string, string>();
 const STEPS = 24;
 
-function dataUri(name: IconName, color: string, t = 0): string {
+/** `name`'s glyph at `t` through its hover morph: the set's own at rest. */
+function glyphUri(name: IconName, t = 0): string {
   const morph = MORPHS[name];
   const q = morph && t > 0 && t < 1 ? Math.round(t * STEPS) : 0;
-  const key = `${name}|${color}|${q}`;
+  if (!morph || q <= 0 || q >= STEPS) return GLYPHS[name];
+  const key = `${name}|${q}`;
   let uri = URIS.get(key);
   if (!uri) {
-    const body = q > 0 && q < STEPS && morph ? morph[0](BODY[name], q / STEPS) : BODY[name];
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">${body.replaceAll("@", color)}</svg>`;
-    uri = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    const [open, body, close] = split(GLYPHS[name]);
+    const svg = open + morph[0](body, q / STEPS) + close;
+    uri = SVG + svg.replaceAll("%", "%25").replaceAll("<", "%3C").replaceAll(">", "%3E").replaceAll("#", "%23").replaceAll('"', "%22");
     URIS.set(key, uri);
   }
   return uri;
@@ -140,21 +205,25 @@ export interface IconProps {
   t?: number;
 }
 
+/** The token an icon draws in by default. */
+const DEFAULT_COLOR: IconColor = "foreground";
+
 /** The colour an icon draws in: `hex`, or its token's value now (reading the
  * appearance, so it follows light and dark). */
 function colorOf(props: IconProps): string {
   colorScheme();
-  return props.hex || String(token((props.color ?? "foreground") as never));
+  return props.hex || String(token((props.color ?? DEFAULT_COLOR) as never));
 }
 
-/** The named glyph, in a theme token's color. */
+/** The named glyph, in a theme token's color. Decorative: the control
+ * around it says what it does. */
 export function Icon(props: IconProps) {
-  const size = () => props.size ?? 24;
   return (
-    <Image
-      src={dataUri(props.name, colorOf(props), props.t)}
-      accessibilityElementsHidden
-      style={{ width: size(), height: size() }}
+    <Glyph
+      icon={glyphUri(props.name, props.t)}
+      size={props.size ?? 24}
+      strokeWidth={STROKE}
+      class={props.hex ? `text-[${props.hex}]` : `text-${props.color ?? DEFAULT_COLOR}`}
     />
   );
 }
@@ -319,6 +388,8 @@ const MOVES: Partial<Record<IconName, [Pose, number]>> = {
   github: [swing, 480],
   code: [scribble, 560],
   close: [turn(90), 300],
+  settings: [turn(45), 320],
+  keyboard: [lift, 300],
 };
 
 /** Samples a pose into keyframes the native animation plays (linear

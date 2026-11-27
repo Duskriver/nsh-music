@@ -13,8 +13,12 @@
     }
   },
   "rust": ".",
-  "minRuntime": "0.6.0",
+  "minRuntime": "0.7.0",
   "updater": {
     "github": "Duskriver/nsh-music"
+  },
+  "dependencies": {
+    "nsh-icon-tabler": "^0.2.2",
+    "nsh-icon": "^0.2.2"
   }
 }
