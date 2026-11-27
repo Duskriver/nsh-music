@@ -46,6 +46,8 @@ nsh run --target tui          # 在终端中运行 TUI 字符界面
 在提交代码或发起 PR 前，请确保以下检查全部通过：
 
 ```sh
+node scripts/i18n.mjs check            # 校验 locales/*.yml 键一致性、占位符与生成类型同步
+node scripts/i18n.mjs generate         # 从 locales/*.yml 重新生成 src/i18n/translations.generated.ts
 nsh check                              # 执行 cargo check --all-targets 与 tsc 类型检查
 nsh build                              # 检查 Rust 导出文档注释并打包 TSX
 nsh test                               # 运行 cargo test 及所有 *.test.tsx 无头测试

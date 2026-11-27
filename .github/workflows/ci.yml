@@ -37,11 +37,10 @@ jobs:
         with:
           node-version: 22
 
-      # nsh-music follows NSH's main: the nightly CLI (https://nsh.dev/docs/installation).
-      - name: Install the NSH CLI (nightly)
-        run: |
-          curl -fsSL https://nsh.dev/install.sh | sh -s -- --nightly
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # The CLI of the commit Cargo.lock pins: the nightly prebuilt CLI while the tag still points there, otherwise one
+      # built from that commit (`nightly` moves every night).
+      - name: Install the locked NSH CLI
+        run: bash .github/install-nsh.sh
 
       # Cargo.lock holds NSH's main at the commit the CLI was built from.
       # The nightly tag moves; say so when they part (see CONTRIBUTING.md).
@@ -54,6 +53,9 @@ jobs:
             "$cli"*) ;;
             *) echo "::warning::The nightly nsh CLI ($cli) is not the NSH commit Cargo.lock holds ($locked); run cargo update -p nsh-core." ;;
           esac
+
+      - name: Check i18n
+        run: node scripts/i18n.mjs check
 
       - name: nsh check
         run: nsh check
